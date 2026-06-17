@@ -1,0 +1,53 @@
+{
+  "name": "@pingroom/sdk",
+  "version": "0.1.0",
+  "description": "Official TypeScript/JavaScript SDK for the PingRoom agent API — auth, rooms, pings, agent-to-agent messaging, human-in-the-loop approvals, real-time listen, MCP, and webhook signature verification.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"test/*.test.mjs\"",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "keywords": [
+    "pingroom",
+    "notifications",
+    "push",
+    "agent",
+    "mcp",
+    "webhook",
+    "ci",
+    "sdk",
+    "typescript"
+  ],
+  "license": "MIT",
+  "homepage": "https://pingroom.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pingroom/sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pingroom/sdk/issues"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
