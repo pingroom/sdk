@@ -2,7 +2,7 @@
 
 Official TypeScript/JavaScript SDK for the [PingRoom](https://pingroom.io) agent API — the push-native notification fabric for agents.
 
-One typed client for everything an agent does: authenticate, create and join rooms, send pings, message other agents by handle, ask a human to approve something and wait for the answer, listen for inbound pings in real time, drive the MCP endpoint, and verify outgoing-webhook signatures.
+One typed client for everything an agent does: authenticate, create and join rooms, send pings, message other agents by handle, ask a human to approve something — or answer a multi-option question — and block until they tap, listen for inbound pings in real time, drive the MCP endpoint, and verify outgoing-webhook signatures.
 
 - **Zero runtime dependencies** — built on the platform `fetch`. Works in Node ≥ 20, browsers, Cloudflare Workers, Deno, and Bun.
 - **Fully typed** — ships `.d.ts`; request fields mirror the HTTP API verbatim.
@@ -99,6 +99,47 @@ if (decided.decision === 'Ship it') {
   // proceed
 }
 ```
+
+## Human-in-the-loop questions
+
+A **question** is the general form of an approval: 2–4 options (or a short typed answer), delivered as a push with tappable buttons, resolving to exactly one answer — first tap wins. Reach for `pr.questions` when you need more than yes/no, a typed reply, or want *anyone in the room* to answer.
+
+```ts
+// Ask — omit `options` for a binary Approve/Deny; ttl defaults to 1h (30s–24h).
+const q = await pr.questions.ask('ab12cd', {
+  prompt: 'Which environment should I deploy?',
+  options: [
+    { value: 'prod', label: 'Production', style: 'primary' },
+    { value: 'staging', label: 'Staging' },
+    { value: 'cancel', label: 'Cancel', style: 'danger' },
+  ],
+  responder_scope: 'room',        // or 'direct' (defaults to your bound user)
+  ttl: 600,
+  correlation_id: 'deploy-1.4.0',
+});
+
+// Block until a human taps (or it expires / is cancelled)
+const answered = await pr.questions.waitForAnswer(q.id);
+
+switch (answered.state) {
+  case 'answered':
+    console.log(`${answered.answer.responder?.display_name} chose ${answered.answer.value}`);
+    // → answered.answer.value is 'prod' | 'staging' | 'cancel'
+    break;
+  case 'expired':   /* nobody answered in time */ break;
+  case 'cancelled': /* the asker withdrew it */   break;
+}
+```
+
+The three outcomes are distinct: an **answered** question whose `answer.value` is your negative option ("the human said no") is not the same as **expired** ("never answered") or **cancelled** ("withdrawn").
+
+```ts
+await pr.questions.get(q.id);                 // current state (polling / audit)
+await pr.questions.list({ state: 'pending' }); // your open questions
+await pr.questions.cancel(q.id);              // withdraw a pending one
+```
+
+> `pr.approvals` is the ergonomic two-option shortcut and stays fully supported — it routes through the same machinery server-side. Use it for plain yes/no gates; use `pr.questions` for everything richer.
 
 ## Incoming webhooks (no token needed)
 

@@ -18,10 +18,13 @@ import type {
   JoinRoomInput,
   ListNotificationsInput,
   ListenInput,
+  ListQuestionsInput,
   Paginated,
   PingInput,
   PingResult,
   PingRoomOptions,
+  Question,
+  QuestionInput,
   QuickAction,
   RegisterParams,
   Room,
@@ -30,6 +33,7 @@ import type {
   UpdateQuickActionInput,
   WaitApprovalInput,
   WaitInput,
+  WaitQuestionInput,
   WaitResult,
 } from './types.js';
 
@@ -266,6 +270,69 @@ class ApprovalsApi {
   }
 }
 
+/**
+ * The general human-in-the-loop primitive: ask a human a question with 2–4
+ * options (or a short typed answer) and block until they tap an answer. An
+ * {@link ApprovalsApi | approval} is the two-option case; reach for questions
+ * when you need more choices, a typed reply, or room-scope answering.
+ */
+class QuestionsApi {
+  constructor(private readonly http: HttpClient) {}
+
+  /** Ask a Question in a room; returns the pending Question (id + computed expiry). */
+  ask(inviteCode: string, input: QuestionInput): Promise<Question> {
+    requireNonEmpty(input.prompt, 'prompt');
+    assertStructuredData(input.data);
+    return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/questions`, {
+      body: dropUndefined({ ...input }),
+    });
+  }
+
+  /** Fetch a Question's current state. */
+  get(questionId: string): Promise<Question> {
+    return this.http.request('GET', `/api/agent/questions/${enc(questionId)}`);
+  }
+
+  /** One long-poll for the answer; returns the (possibly still-pending) Question. */
+  wait(questionId: string, input: WaitQuestionInput = {}): Promise<Question> {
+    return this.http.request('GET', `/api/agent/questions/${enc(questionId)}/wait`, {
+      query: dropUndefined({ timeout: input.timeout }),
+      timeoutMs: waitTimeoutMs(input.timeout),
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+  }
+
+  /**
+   * Block until the human answers (or the question expires/cancels), looping
+   * wait() under the hood. Returns the resolved Question — inspect `state` and
+   * `answer.value` to branch.
+   */
+  async waitForAnswer(questionId: string, input: { signal?: AbortSignal } = {}): Promise<Question> {
+    for (;;) {
+      if (input.signal?.aborted) {
+        throw input.signal.reason ?? new Error('aborted');
+      }
+      const question = await this.wait(questionId, input.signal ? { signal: input.signal } : {});
+      if (question.state !== 'pending') {
+        return question;
+      }
+    }
+  }
+
+  /** List the asker's Questions, optionally filtered by state. */
+  async list(input: ListQuestionsInput = {}): Promise<Question[]> {
+    const res = await this.http.request<{ questions: Question[] }>('GET', '/api/agent/questions', {
+      query: dropUndefined({ state: input.state }),
+    });
+    return res.questions ?? [];
+  }
+
+  /** Withdraw a still-pending Question (409 if it already resolved). */
+  cancel(questionId: string): Promise<Question> {
+    return this.http.request('POST', `/api/agent/questions/${enc(questionId)}/cancel`, { body: {} });
+  }
+}
+
 class ProfileApi {
   constructor(private readonly http: HttpClient) {}
 
@@ -306,6 +373,7 @@ export class PingRoom {
   readonly notifications: NotificationsApi;
   readonly agents: AgentsApi;
   readonly approvals: ApprovalsApi;
+  readonly questions: QuestionsApi;
   readonly profile: ProfileApi;
   readonly directory: DirectoryApi;
   readonly mcp: McpClient;
@@ -329,6 +397,7 @@ export class PingRoom {
     this.notifications = new NotificationsApi(this.http);
     this.agents = new AgentsApi(this.http);
     this.approvals = new ApprovalsApi(this.http);
+    this.questions = new QuestionsApi(this.http);
     this.profile = new ProfileApi(this.http);
     this.directory = new DirectoryApi(this.http);
     this.mcp = new McpClient(this.http);

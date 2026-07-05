@@ -22,8 +22,12 @@ export type AgentScope =
   | 'pingroom:actions:trigger'
   | 'pingroom:broadcast:send'
   | 'pingroom:notifications:read'
+  | 'pingroom:webhooks:read'
+  | 'pingroom:webhooks:write'
+  | 'pingroom:webhooks:delete'
   | 'pingroom:agents:ping'
   | 'pingroom:approvals:request'
+  | 'pingroom:questions:ask'
   | 'pingroom:profile:write';
 
 /** A known scope, or any forward-compatible string (keeps autocomplete on the knowns). */
@@ -258,6 +262,125 @@ export interface WaitApprovalInput {
   /** Seconds the server holds the connection (0–30, default 20). */
   timeout?: number;
   signal?: AbortSignal;
+}
+
+// --- questions ------------------------------------------------------------
+//
+// The general human-in-the-loop primitive. An approval is the two-option case;
+// a Question generalizes it to 2–4 options and/or a short typed answer, with a
+// responder scope and a mandatory-but-defaulted expiry. First valid answer wins.
+
+/** The lifecycle states of a Question. Terminal states are immutable. */
+export type QuestionState = 'pending' | 'answered' | 'expired' | 'cancelled';
+
+/** Who may answer: `direct` (one named person) or `room` (any eligible member). */
+export type ResponderScope = 'direct' | 'room';
+
+/** One option offered on a Question. A bare string is shorthand for `{ value, label: value }`. */
+export interface QuestionOptionInput {
+  /** Stable machine token returned as the answer (1–40 chars, unique per question). */
+  value: string;
+  /** Human text on the button (defaults to `value`; 1–40 chars). */
+  label?: string;
+  /** Presentation hint: `primary` = brand-strike affirmative, `danger` = cancel. */
+  style?: 'primary' | 'danger' | 'default';
+  /** Legacy boolean form of `style: 'primary'`. */
+  primary?: boolean;
+  /** Legacy boolean form of `style: 'danger'`. */
+  destructive?: boolean;
+}
+
+export type QuestionOptionSpec = string | QuestionOptionInput;
+
+/** Invite a short typed answer, on its own (text-only) or alongside options. */
+export interface QuestionTextInput {
+  placeholder?: string;
+  /** 1–60; clamped server-side. */
+  max_length?: number;
+}
+
+export interface QuestionInput {
+  /** The question the human reads (required, ≤ 500 chars). */
+  prompt: string;
+  /** Optional secondary line, e.g. a build number (≤ 40 chars). */
+  context?: string;
+  /** 2–4 options. Omit for the binary Approve/Deny default (the lock-screen fast path). */
+  options?: QuestionOptionSpec[];
+  /** Offer a typed answer instead of / alongside options. */
+  text_input?: QuestionTextInput;
+  /** `direct` (defaults to your bound user) or `room` (any eligible member). Default `direct`. */
+  responder_scope?: ResponderScope;
+  /** For `direct` scope: a specific room member (UUID). Defaults to the bound user. */
+  target_user_id?: string;
+  /** Seconds until expiry. Omit for the server default (1h); clamped to 30–86400. */
+  ttl?: number;
+  data?: JsonObject;
+  correlation_id?: string;
+  reply_to?: string;
+}
+
+/** A resolved option on the Question wire shape. */
+export interface QuestionOption {
+  value: string;
+  label: string;
+  primary?: boolean;
+  destructive?: boolean;
+  [key: string]: unknown;
+}
+
+/** The resolution, present once `state === 'answered'`. */
+export interface QuestionAnswer {
+  /** The chosen option's `value`, or null for a text-only answer. */
+  value: string | null;
+  /** The chosen option's `label`. */
+  label: string | null;
+  /** The typed answer, when the question invited one. */
+  text: string | null;
+  /** The authenticated human who answered (never caller-supplied). */
+  responder: { id: string; display_name: string | null } | null;
+  answered_at: string | null;
+}
+
+/** The public Question wire shape — identical across ask / get / wait / list. */
+export interface Question {
+  id: string;
+  kind: 'question';
+  prompt: string;
+  context: string | null;
+  options: QuestionOption[];
+  text_input: { placeholder: string | null; max_length: number } | null;
+  responder_scope: ResponderScope;
+  target_user_id: string | null;
+  resolution_policy: 'first' | (string & {});
+  state: QuestionState;
+  answer: QuestionAnswer | null;
+  expires_at: string | null;
+  resolved_at: string | null;
+  correlation_id: string | null;
+  reply_to: string | null;
+  data: JsonObject | null;
+  created_at: string | null;
+  room?: { code: string; name: string; icon: string | null; color: string | null };
+  room_code?: string;
+  asker?: {
+    type: 'agent';
+    id: string | null;
+    handle: string | null;
+    display_name: string | null;
+    avatar_url: string | null;
+  };
+  [key: string]: unknown;
+}
+
+export interface WaitQuestionInput {
+  /** Seconds the server holds the connection (0–30, default 20). */
+  timeout?: number;
+  signal?: AbortSignal;
+}
+
+export interface ListQuestionsInput {
+  /** Filter by state; `all` returns every state. Omit for the recent window across states. */
+  state?: QuestionState | 'all';
 }
 
 // --- profile --------------------------------------------------------------
