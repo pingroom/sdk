@@ -2,9 +2,10 @@
  * Webhook helpers — usable standalone, no client/token required.
  *
  *  - verifyWebhookSignature: verify an OUTGOING webhook PingRoom sent you.
- *    PingRoom signs `HMAC-SHA256(signing_secret, rawBody)` and sends it as
- *    `X-PingRoom-Signature: sha256=<hex>`. Verify over the EXACT raw request
- *    body bytes — re-serializing the parsed JSON will not match.
+ *    PingRoom signs `HMAC-SHA256(signing_secret, timestamp + "." + rawBody)`
+ *    and sends the timestamp and lower-case hex signature in the PingRoom
+ *    headers. Verify over the EXACT raw request body bytes — re-serializing the
+ *    parsed JSON will not match.
  *
  *  - sendIncomingWebhook: fire a room's INCOMING webhook (the URL carries its
  *    own secret, so no agent token is needed) — the one-line CI/deploy ping.
@@ -14,7 +15,7 @@ import { PingRoomError } from './errors.js';
 import { combineSignals } from './internal/async.js';
 import { assertActionNumber, assertStructuredData } from './internal/guards.js';
 import { assertSecureUrl } from './internal/url.js';
-import type { FetchLike, JsonObject } from './types.js';
+import type { ActionState, FetchLike, JsonObject } from './types.js';
 import { VERSION } from './version.js';
 
 export const WEBHOOK_SIGNATURE_HEADER = 'X-PingRoom-Signature';
@@ -27,8 +28,12 @@ export interface VerifyWebhookSignatureOptions {
   payload: string | ArrayBuffer | Uint8Array;
   /** The X-PingRoom-Signature header value (with or without the `sha256=` prefix). */
   signature: string | null | undefined;
+  /** The X-PingRoom-Timestamp header value (Unix seconds). */
+  timestamp: string | number | null | undefined;
   /** The webhook's signing_secret. */
   secret: string;
+  /** Allowed timestamp skew in seconds. Defaults to 300 (five minutes). */
+  maxAgeSeconds?: number;
 }
 
 /**
@@ -39,11 +44,22 @@ export async function verifyWebhookSignature(opts: VerifyWebhookSignatureOptions
   if (!opts.signature || !opts.secret) {
     return false;
   }
+  const timestamp = normalizeTimestamp(opts.timestamp);
+  if (timestamp === null) {
+    return false;
+  }
+  const maxAgeSeconds = opts.maxAgeSeconds ?? 300;
+  if (!Number.isFinite(maxAgeSeconds) || maxAgeSeconds < 0) {
+    return false;
+  }
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > maxAgeSeconds) {
+    return false;
+  }
   const provided = normalizeSignature(opts.signature).toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(provided)) {
     return false;
   }
-  const expected = await hmacSha256Hex(opts.secret, toMessageString(opts.payload));
+  const expected = await hmacSha256Hex(opts.secret, signedMessage(timestamp, opts.payload));
   return timingSafeEqualHex(provided, expected);
 }
 
@@ -55,6 +71,10 @@ export interface IncomingWebhookPayload {
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
+  /** Override the selected quick action and require acknowledgement for this ping. */
+  requires_ack?: boolean;
+  /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. */
+  ack_timeout_seconds?: number | null;
 }
 
 export interface SendIncomingWebhookOptions {
@@ -71,6 +91,7 @@ export interface IncomingWebhookResult {
   success: boolean;
   notification_id?: string;
   message?: string;
+  action_state?: ActionState | null;
   [key: string]: unknown;
 }
 
@@ -91,6 +112,8 @@ export async function sendIncomingWebhook(
   if (payload.data !== undefined) body.data = payload.data;
   if (payload.correlation_id !== undefined) body.correlation_id = payload.correlation_id;
   if (payload.reply_to !== undefined) body.reply_to = payload.reply_to;
+  if (payload.requires_ack !== undefined) body.requires_ack = payload.requires_ack;
+  if (payload.ack_timeout_seconds !== undefined) body.ack_timeout_seconds = payload.ack_timeout_seconds;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -144,20 +167,36 @@ function normalizeSignature(sig: string): string {
   return s.startsWith('sha256=') ? s.slice('sha256='.length) : s;
 }
 
-function toMessageString(payload: string | ArrayBuffer | Uint8Array): string {
-  if (typeof payload === 'string') {
-    return payload;
+function normalizeTimestamp(timestamp: string | number | null | undefined): string | null {
+  if (timestamp === null || timestamp === undefined) {
+    return null;
   }
-  if (payload instanceof Uint8Array) {
-    return new TextDecoder().decode(payload);
+  const normalized = typeof timestamp === 'string' ? timestamp.trim() : String(timestamp);
+  if (!/^\d+$/.test(normalized)) {
+    return null;
   }
-  return new TextDecoder().decode(new Uint8Array(payload));
+  const seconds = Number(normalized);
+  return Number.isSafeInteger(seconds) ? normalized : null;
 }
 
-async function hmacSha256Hex(secret: string, message: string): Promise<string> {
+function signedMessage(timestamp: string, payload: string | ArrayBuffer | Uint8Array): Uint8Array {
+  const enc = new TextEncoder();
+  const prefix = enc.encode(`${timestamp}.`);
+  const body = typeof payload === 'string'
+    ? enc.encode(payload)
+    : payload instanceof Uint8Array
+      ? payload
+      : new Uint8Array(payload);
+  const message = new Uint8Array(prefix.byteLength + body.byteLength);
+  message.set(prefix, 0);
+  message.set(body, prefix.byteLength);
+  return message;
+}
+
+async function hmacSha256Hex(secret: string, message: Uint8Array): Promise<string> {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const signature = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  const signature = await crypto.subtle.sign('HMAC', key, message as BufferSource);
   const bytes = new Uint8Array(signature);
   let hex = '';
   for (const b of bytes) {

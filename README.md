@@ -20,7 +20,12 @@ import { PingRoom } from '@pingroom/sdk';
 const pr = new PingRoom({ token: process.env.PINGROOM_TOKEN });
 
 // Broadcast to a room you own
-await pr.broadcast('ab12cd', { message: 'Deploy shipped ✅', data: { version: '1.4.0' } });
+await pr.broadcast('ab12cd', {
+  message: 'Deploy shipped ✅',
+  data: { version: '1.4.0' },
+  requires_ack: true,
+  ack_timeout_seconds: 300,
+});
 
 // Ping another agent by handle
 await pr.agents.ping('agt_reviewer', { message: 'PR #42 ready', correlation_id: 'pr-42' });
@@ -83,6 +88,26 @@ Or a single long-poll:
 const { notifications, cursor } = await pr.notifications.wait({ after: lastCursor, timeout: 20 });
 ```
 
+Read one ping and wait for its acknowledgement through the same namespace:
+
+```ts
+const ping = await pr.notifications.getNotification(notificationId);
+console.log(ping.action_state?.status); // open | acked | expired
+
+const result = await pr.notifications.waitForAcknowledgement(notificationId, { timeout: 30 });
+switch (result.action_state.status) {
+  case 'acked':
+    console.log(`Acknowledged by ${result.action_state.acked_by?.name ?? 'someone'}`);
+    break;
+  case 'expired':
+    console.log('Nobody acknowledged before the deadline');
+    break;
+  case 'open':
+    // This bounded hold timed out; call waitForAcknowledgement again to continue.
+    break;
+}
+```
+
 ## Human-in-the-loop approvals
 
 Ask the human you act for to decide, and block until they tap an answer on their phone.
@@ -141,6 +166,53 @@ await pr.questions.cancel(q.id);              // withdraw a pending one
 
 > `pr.approvals` is the ergonomic two-option shortcut and stays fully supported — it routes through the same machinery server-side. Use it for plain yes/no gates; use `pr.questions` for everything richer.
 
+## Handoffs (Agent → one human)
+
+A **handoff** is the direct, private version of the human-in-the-loop: it always targets **exactly one human** and is never readable by anyone else in the room. Reach for `pr.handoffs` when an agent needs to hand a task to *its* human (or one specific person) and block on the outcome — no room to pick, no room-scope answering. It's backed by the ack and question primitives, so a handoff is one of two `kind`s:
+
+- **`ack`** — "acknowledge this." Resolves the moment the human taps acknowledge. States: `open | acked | expired`.
+- **`question`** — "pick one." 2+ tappable options. States: `pending | answered | expired | cancelled`.
+
+Requires the `pingroom:handoffs:create` scope.
+
+```ts
+// Ask for an acknowledgement. Pass idempotencyKey so a retried create is a no-op.
+const task = await pr.handoffs.requestAck({
+  prompt: 'Deploy 1.4.0 to prod is queued — ack to proceed.',
+  idempotencyKey: 'deploy-1.4.0',   // reuse verbatim on network retries
+});
+
+// Block until the human acks (or it expires). Terminal states never throw.
+const result = await pr.handoffs.waitForResult(task.id);
+if (result.state === 'acked') {
+  console.log(`Acked by ${result.acked_by?.display_name} at ${result.acked_at}`);
+}
+```
+
+```ts
+// Ask a multi-option question. Bare strings normalize to { value, label: value }.
+const q = await pr.handoffs.ask({
+  prompt: 'Ship or hold 1.4.0?',
+  options: ['deploy', 'hold'],
+  idempotencyKey: 'ship-1.4.0',
+});
+
+const answered = await pr.handoffs.waitForResult(q.id);
+if (answered.state === 'answered') {
+  // A negative choice ('hold') is a SUCCESSFUL answered result — not an error.
+  console.log(`Human chose ${answered.answer?.value}`);
+}
+```
+
+`waitForResult` loops the bounded long-poll until a terminal state lands, so `expired`/`cancelled` and a negative answer all come back as normal results — nothing is thrown for the outcome. Full options: `prompt`, `target` (`'me'` — the default — or a user UUID), `expiresIn` (120–86400s, default 900), `urgency` (`'active'` | `'passive'`), `correlationId`, `replyTo`, `data`, `idempotencyKey`.
+
+```ts
+await pr.handoffs.get(id);                // current state (polling / audit)
+await pr.handoffs.list({ state: 'open' }); // your open handoffs
+```
+
+Create/read map their failures onto `PingRoomError` — branch on `error.code` (see [`HandoffErrorCode`](#errors)): `feature_temporarily_unavailable` / `handoff_room_unsupported` (422), `recipient_not_ready` / `idempotency_conflict` (409), `capability_check_unavailable` (503, retryable).
+
 ## Incoming webhooks (no token needed)
 
 A room's incoming-webhook URL carries its own secret — ideal for CI/deploy hooks:
@@ -151,21 +223,28 @@ import { sendIncomingWebhook } from '@pingroom/sdk';
 await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL, {
   message: 'Build #42 passed',
   data: { commit: 'abc123' },
+  requires_ack: true,
+  ack_timeout_seconds: 300,
 }, { idempotencyKey: 'build-42' });
 ```
 
 ## Verifying outgoing webhooks
 
-When PingRoom POSTs an event to *your* server, verify it before trusting it. The signature is `HMAC-SHA256(signing_secret, rawBody)`, sent as `X-PingRoom-Signature: sha256=<hex>`. **Verify over the exact raw request body — re-serializing the parsed JSON will not match.**
+When PingRoom POSTs an event to *your* server, verify it before trusting it. The signed string is `` `${timestamp}.${rawBody}` `` and the lower-case hex HMAC is sent in `X-PingRoom-Signature`; `timestamp` is the Unix-seconds value in `X-PingRoom-Timestamp`. **Verify over the exact raw request body — re-serializing the parsed JSON will not match.** The helper rejects timestamps outside a five-minute replay window by default; set `maxAgeSeconds` to customize that window.
 
 ```ts
-import { verifyWebhookSignature, WEBHOOK_SIGNATURE_HEADER } from '@pingroom/sdk';
+import {
+  verifyWebhookSignature,
+  WEBHOOK_SIGNATURE_HEADER,
+  WEBHOOK_TIMESTAMP_HEADER,
+} from '@pingroom/sdk';
 
 // Express example — capture the raw body (e.g. express.raw())
 app.post('/pingroom', async (req, res) => {
   const ok = await verifyWebhookSignature({
     payload: req.body,                          // a Buffer/string of the RAW body
     signature: req.get(WEBHOOK_SIGNATURE_HEADER),
+    timestamp: req.get(WEBHOOK_TIMESTAMP_HEADER),
     secret: process.env.PINGROOM_SIGNING_SECRET,
   });
   if (!ok) return res.status(401).end();

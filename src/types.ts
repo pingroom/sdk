@@ -28,6 +28,7 @@ export type AgentScope =
   | 'pingroom:agents:ping'
   | 'pingroom:approvals:request'
   | 'pingroom:questions:ask'
+  | 'pingroom:handoffs:create'
   | 'pingroom:profile:write';
 
 /** A known scope, or any forward-compatible string (keeps autocomplete on the knowns). */
@@ -90,6 +91,8 @@ export interface QuickActionInput {
   icon: string;
   sound?: string | null;
   haptic_style?: string | null;
+  /** Every fire of this reusable action opens the acknowledgement lifecycle. */
+  requires_ack?: boolean;
 }
 
 export interface CreateRoomInput {
@@ -119,6 +122,8 @@ export interface UpdateQuickActionInput {
   icon: string;
   sound?: string | null;
   haptic_style?: string | null;
+  /** Every fire of this reusable action opens the acknowledgement lifecycle. */
+  requires_ack?: boolean;
 }
 
 export interface QuickAction {
@@ -128,6 +133,8 @@ export interface QuickAction {
   icon: string;
   sound?: string | null;
   haptic_style?: string | null;
+  /** Every fire of this reusable action opens the acknowledgement lifecycle. */
+  requires_ack?: boolean;
   [key: string]: unknown;
 }
 
@@ -153,10 +160,29 @@ export interface PingInput {
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
+  /** Open the acknowledgement lifecycle for this ping. First acknowledgement wins. */
+  requires_ack?: boolean;
+  /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. */
+  ack_timeout_seconds?: number | null;
 }
 
 export interface TriggerInput {
   trigger_source?: string;
+}
+
+/** The server-authoritative acknowledgement lifecycle attached to a ping. */
+export interface ActionState {
+  status: 'open' | 'acked' | 'expired' | null;
+  requires_ack: boolean;
+  acked_by: {
+    id: string | null;
+    name: string | null;
+    profile_image: string | null;
+  } | null;
+  acked_at: string | null;
+  expires_at: string | null;
+  /** Viewer-specific human mutation eligibility; agent read paths return false. */
+  can_ack?: boolean;
 }
 
 export interface PingResult {
@@ -168,6 +194,7 @@ export interface PingResult {
   data?: JsonObject | null;
   correlation_id?: string | null;
   reply_to?: string | null;
+  action_state?: ActionState | null;
   created_at: string;
   recipient_count?: number;
   muted_count?: number;
@@ -181,6 +208,7 @@ export interface DirectPingResult {
   message: string;
   correlation_id: string | null;
   reply_to: string | null;
+  action_state?: ActionState | null;
   created_at: string;
   [key: string]: unknown;
 }
@@ -194,10 +222,22 @@ export interface AgentNotification {
   data?: JsonObject | null;
   correlation_id?: string | null;
   reply_to?: string | null;
+  action_state?: ActionState | null;
   created_at: string;
   room?: { code: string; name: string; icon: string | null; color: string | null };
   sender?: { id: string; name: string | null };
 }
+
+/** Full notification record returned by the single-notification read path. */
+export type NotificationDetail = Omit<AgentNotification, 'room'> & {
+  room_id?: string;
+  sender_id?: string;
+  type?: string;
+  requires_ack?: boolean;
+  action_state: ActionState | null;
+  room?: Room;
+  [key: string]: unknown;
+};
 
 export interface ListNotificationsInput {
   type?: string;
@@ -219,6 +259,17 @@ export interface WaitInput {
 export interface WaitResult {
   notifications: AgentNotification[];
   cursor: string;
+}
+
+export interface WaitForAcknowledgementInput {
+  /** Seconds to hold the connection (0–30, default 20). */
+  timeout?: number;
+  signal?: AbortSignal;
+}
+
+export interface AcknowledgementWaitResult {
+  id: string;
+  action_state: ActionState;
 }
 
 export interface ListenInput {
@@ -381,6 +432,142 @@ export interface WaitQuestionInput {
 export interface ListQuestionsInput {
   /** Filter by state; `all` returns every state. Omit for the recent window across states. */
   state?: QuestionState | 'all';
+}
+
+// --- handoffs -------------------------------------------------------------
+//
+// A handoff is the Agent → one-human loop: DIRECT (exactly one human) and
+// PRIVATE (no other room member can read it). It's a façade over the ack and
+// question primitives, so its state space is the union of the two — kept
+// DISTINCT per kind:
+//
+//   ack      → open | acked | expired
+//   question → pending | answered | expired | cancelled
+//
+// A negative answer to a question handoff (e.g. `hold`/`deny`) is a SUCCESSFUL
+// `answered` state, not an error.
+
+/** Which primitive backs a handoff: an acknowledgement or a multi-option question. */
+export type HandoffKind = 'ack' | 'question';
+
+/** The lifecycle states of an `ack` handoff. Terminal: `acked`, `expired`. */
+export type HandoffAckState = 'open' | 'acked' | 'expired';
+
+/** The lifecycle states of a `question` handoff. Terminal: `answered`, `expired`, `cancelled`. */
+export type HandoffQuestionState = 'answered' | 'expired' | 'cancelled' | 'pending';
+
+/** The full handoff state space (union of ack + question states). */
+export type HandoffState = HandoffAckState | HandoffQuestionState;
+
+/**
+ * Whether the ping has been enqueued for delivery (`enqueued`) or is still
+ * pending dispatch (`pending`). Only populated on create; null on reads.
+ */
+export type HandoffDeliveryState = 'enqueued' | 'pending';
+
+/** One option offered on a `question` handoff. A bare string is shorthand for `{ value, label: value }`. */
+export interface HandoffOptionInput {
+  /** Stable machine token returned as the answer. */
+  value: string;
+  /** Human text on the button (defaults to `value`). */
+  label?: string;
+  /** Presentation hint: `primary` = affirmative, `danger` = cancel/negative. */
+  style?: 'primary' | 'danger' | 'default';
+}
+
+export type HandoffOptionSpec = string | HandoffOptionInput;
+
+/** A resolved option on the handoff wire shape. */
+export interface HandoffOption {
+  value: string;
+  label: string;
+  [key: string]: unknown;
+}
+
+/** The human who acknowledged an `ack` handoff (present once `state === 'acked'`). */
+export interface HandoffAcker {
+  /** Null when the actor is redacted (reader-privacy). */
+  id: string | null;
+  display_name: string | null;
+}
+
+/** The resolution of a `question` handoff (present once `state === 'answered'`). */
+export interface HandoffAnswer {
+  /** The chosen option's `value`, or null for a text-only answer. */
+  value: string | null;
+  /** The chosen option's `label`. */
+  label: string | null;
+  /** The typed answer, when the question invited one. */
+  text: string | null;
+  /** The authenticated human who answered. */
+  responder: { id: string | null; display_name: string | null } | null;
+  answered_at: string | null;
+}
+
+/**
+ * The public handoff wire shape — identical across create / get / wait / list.
+ * `options`/`answer` appear on question handoffs; `acked_by`/`acked_at` on ack
+ * handoffs.
+ */
+export interface Handoff {
+  id: string;
+  kind: HandoffKind;
+  prompt: string;
+  state: HandoffState;
+  /** Delivery status, populated only on create; null on reads. */
+  delivery_state: HandoffDeliveryState | null;
+  correlation_id: string | null;
+  reply_to: string | null;
+  data: JsonObject | null;
+  expires_at: string | null;
+  created_at: string | null;
+  /** ack handoff: the human who acknowledged (once `state === 'acked'`). */
+  acked_by?: HandoffAcker | null;
+  /** ack handoff: when it was acknowledged. */
+  acked_at?: string | null;
+  /** question handoff: the offered options. */
+  options?: HandoffOption[];
+  /** question handoff: the resolution (once `state === 'answered'`). */
+  answer?: HandoffAnswer | null;
+  [key: string]: unknown;
+}
+
+/** Ask a human to acknowledge (the ack handoff). Resolves on the first acknowledgement. */
+export interface RequestAckInput {
+  /** What the human reads (required, ≤ 500 chars). */
+  prompt: string;
+  /** Who to reach: `me` (the bound human, the default) or a user UUID. */
+  target?: string;
+  /** Seconds until expiry. Clamped server-side to 120–86400; default 900. */
+  expiresIn?: number;
+  /** Interruption level — `active` (default) or `passive`. */
+  urgency?: 'active' | 'passive';
+  correlationId?: string;
+  replyTo?: string;
+  data?: JsonObject;
+  /**
+   * Idempotency key — same key + same body replays the original resource; a
+   * different body for the same key returns a 409 `idempotency_conflict`.
+   * Reuse it verbatim on network retries.
+   */
+  idempotencyKey?: string;
+}
+
+/** Ask a human a multi-option question (the question handoff). Resolves on the first tapped answer. */
+export interface AskInput extends RequestAckInput {
+  /** 2..N options. A bare string is shorthand for `{ value, label: value }`. */
+  options: HandoffOptionSpec[];
+}
+
+export interface WaitHandoffInput {
+  /** Seconds the server holds the connection (server caps at 25s; default 20). */
+  timeout?: number;
+  signal?: AbortSignal;
+}
+
+export interface ListHandoffsInput {
+  /** Filter to the agent's open handoffs. */
+  state?: 'open';
 }
 
 // --- profile --------------------------------------------------------------
