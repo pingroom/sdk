@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PingRoom, PingRoomError } from '../dist/index.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+test('package and lockfile versions stay aligned', () => {
+  const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
+  const lock = JSON.parse(readFileSync(join(__dirname, '..', 'package-lock.json'), 'utf8'));
+  assert.equal(pkg.version, '0.3.0');
+  assert.equal(lock.version, pkg.version);
+  assert.equal(lock.packages[''].version, pkg.version);
+});
 
 /** Build a fetch mock that routes by "METHOD /pathname" and records every call. */
 function recorder(routes) {
@@ -324,6 +337,25 @@ test('questions.cancel POSTs to the cancel path', async () => {
   assert.equal(calls[0].init.method, 'POST');
 });
 
+test('inbox.ensure activates the private inbox with an empty POST', async () => {
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/inbox/ensure': () => ({
+      status: 201,
+      body: {
+        onboarded: true,
+        replayed: false,
+        room: { id: 'r-inbox', name: 'Agent Inbox', invite_code: 'INBOX1', is_agent_inbox: true },
+        question: { id: 'q-onboard', kind: 'question', state: 'pending', options: [] },
+      },
+    }),
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  const result = await pr.inbox.ensure();
+  assert.equal(result.room.is_agent_inbox, true);
+  assert.equal(result.question.id, 'q-onboard');
+  assert.deepEqual(JSON.parse(calls[0].init.body), {});
+});
+
 test('handoffs.requestAck posts a direct ack handoff with the Idempotency-Key header', async () => {
   const { calls, fetchMock } = recorder({
     'POST /api/agent/handoffs': () => ({
@@ -363,6 +395,18 @@ test('handoffs.requestAck sends no Idempotency-Key when omitted and honors an ex
   assert.deepEqual(JSON.parse(calls[0].init.body).audience, { type: 'direct', user_id: 'user-uuid-9' });
 });
 
+test('handoffs.requestAck preserves a failed delivery state from the API', async () => {
+  const { fetchMock } = recorder({
+    'POST /api/agent/handoffs': () => ({
+      status: 201,
+      body: { id: 'h-failed', kind: 'ack', prompt: 'Ack me', state: 'open', delivery_state: 'failed' },
+    }),
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  const handoff = await pr.handoffs.requestAck({ prompt: 'Ack me' });
+  assert.equal(handoff.delivery_state, 'failed');
+});
+
 test('handoffs.ask normalizes bare-string options to {value,label}', async () => {
   const { calls, fetchMock } = recorder({
     'POST /api/agent/handoffs': () => ({
@@ -389,6 +433,16 @@ test('handoffs.ask requires at least 2 options before fetching', () => {
   assert.equal(fetched, false);
 });
 
+test('handoffs.ask rejects more than 4 options before fetching', () => {
+  let fetched = false;
+  const pr = new PingRoom({ token: 't', fetch: async () => ((fetched = true), new Response('{}')) });
+  assert.throws(
+    () => pr.handoffs.ask({ prompt: 'x', options: ['one', 'two', 'three', 'four', 'five'] }),
+    (e) => e instanceof PingRoomError && e.code === 'invalid_request' && /between 2 and 4/.test(e.message),
+  );
+  assert.equal(fetched, false);
+});
+
 test('handoffs.waitForResult loops until a terminal state, returning a negative answer as success', async () => {
   let n = 0;
   const fetchMock = async (url) => {
@@ -407,15 +461,15 @@ test('handoffs.waitForResult loops until a terminal state, returning a negative 
   assert.equal(n, 2);
 });
 
-test('handoffs.list unwraps { handoffs } and sends the state filter', async () => {
+test('handoffs.list unwraps { handoffs } and sends the recent-history state filter', async () => {
   const { calls, fetchMock } = recorder({
     'GET /api/agent/handoffs': () => ({ body: { handoffs: [{ id: 'h5', kind: 'ack', state: 'open' }] } }),
   });
   const pr = new PingRoom({ token: 't', fetch: fetchMock });
-  const list = await pr.handoffs.list({ state: 'open' });
+  const list = await pr.handoffs.list({ state: 'all' });
   assert.equal(list.length, 1);
   assert.equal(list[0].id, 'h5');
-  assert.match(calls[0].url, /state=open/);
+  assert.match(calls[0].url, /state=all/);
 });
 
 test('handoffs surfaces a 409 idempotency_conflict as a typed PingRoomError', async () => {

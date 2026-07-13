@@ -171,9 +171,17 @@ await pr.questions.cancel(q.id);              // withdraw a pending one
 A **handoff** is the direct, private version of the human-in-the-loop: it always targets **exactly one human** and is never readable by anyone else in the room. Reach for `pr.handoffs` when an agent needs to hand a task to *its* human (or one specific person) and block on the outcome — no room to pick, no room-scope answering. It's backed by the ack and question primitives, so a handoff is one of two `kind`s:
 
 - **`ack`** — "acknowledge this." Resolves the moment the human taps acknowledge. States: `open | acked | expired`.
-- **`question`** — "pick one." 2+ tappable options. States: `pending | answered | expired | cancelled`.
+- **`question`** — "pick one." 2–4 tappable options. States: `pending | answered | expired | cancelled`.
 
 Requires the `pingroom:handoffs:create` scope.
+
+On first connect, activate the human's private Agent Inbox. This is idempotent:
+it creates at most one inbox and one onboarding test Question.
+
+```ts
+const onboarding = await pr.inbox.ensure();
+console.log(onboarding.room.invite_code, onboarding.question.state);
+```
 
 ```ts
 // Ask for an acknowledgement. Pass idempotencyKey so a retried create is a no-op.
@@ -209,9 +217,10 @@ if (answered.state === 'answered') {
 ```ts
 await pr.handoffs.get(id);                // current state (polling / audit)
 await pr.handoffs.list({ state: 'open' }); // your open handoffs
+await pr.handoffs.list({ state: 'all' });  // recent history (up to 200 per kind)
 ```
 
-Create/read map their failures onto `PingRoomError` — branch on `error.code` (see [`HandoffErrorCode`](#errors)): `feature_temporarily_unavailable` / `handoff_room_unsupported` (422), `recipient_not_ready` / `idempotency_conflict` (409), `capability_check_unavailable` (503, retryable).
+Create/read map coded failures onto `PingRoomError` — branch on `error.code` (see [`HandoffErrorCode`](#errors)). The exported union includes target-policy, scope/quota, idempotency, feature, and capability failures; `capability_check_unavailable` is retryable. Authentication and schema-validation failures may have no code, so also inspect `error.status`.
 
 ## Incoming webhooks (no token needed)
 

@@ -460,10 +460,10 @@ export type HandoffQuestionState = 'answered' | 'expired' | 'cancelled' | 'pendi
 export type HandoffState = HandoffAckState | HandoffQuestionState;
 
 /**
- * Whether the ping has been enqueued for delivery (`enqueued`) or is still
- * pending dispatch (`pending`). Only populated on create; null on reads.
+ * Whether the ping was enqueued, remains pending dispatch, or exhausted its
+ * retry budget (`failed`). Only populated on create; null on reads.
  */
-export type HandoffDeliveryState = 'enqueued' | 'pending';
+export type HandoffDeliveryState = 'enqueued' | 'pending' | 'failed';
 
 /** One option offered on a `question` handoff. A bare string is shorthand for `{ value, label: value }`. */
 export interface HandoffOptionInput {
@@ -555,7 +555,7 @@ export interface RequestAckInput {
 
 /** Ask a human a multi-option question (the question handoff). Resolves on the first tapped answer. */
 export interface AskInput extends RequestAckInput {
-  /** 2..N options. A bare string is shorthand for `{ value, label: value }`. */
+  /** 2–4 options. A bare string is shorthand for `{ value, label: value }`. */
   options: HandoffOptionSpec[];
 }
 
@@ -566,8 +566,31 @@ export interface WaitHandoffInput {
 }
 
 export interface ListHandoffsInput {
-  /** Filter to the agent's open handoffs. */
-  state?: 'open';
+  /** `open` for unresolved work, or `all` for recent history (up to 200 per kind). */
+  state?: 'open' | 'all';
+}
+
+// --- Agent Inbox ---------------------------------------------------------
+
+/** Idempotent first-connect result from POST /api/agent/inbox/ensure. */
+export interface AgentInboxEnsureResult {
+  onboarded: true;
+  replayed: boolean;
+  room: {
+    id: string;
+    name: string;
+    invite_code: string;
+    is_agent_inbox: true;
+  };
+  question: {
+    id: string;
+    kind: 'question';
+    prompt: string;
+    options: HandoffOption[];
+    state: HandoffQuestionState;
+    expires_at: string | null;
+    created_at: string | null;
+  };
 }
 
 // --- profile --------------------------------------------------------------

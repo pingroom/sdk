@@ -5,6 +5,7 @@ import { assertActionNumber, assertStructuredData, requireNonEmpty } from './int
 import { McpClient } from './mcp.js';
 import type {
   AcknowledgementWaitResult,
+  AgentInboxEnsureResult,
   AgentNotification,
   Approval,
   ApprovalInput,
@@ -406,8 +407,8 @@ class HandoffsApi {
   ask(input: AskInput): Promise<Handoff> {
     requireNonEmpty(input.prompt, 'prompt');
     assertStructuredData(input.data);
-    if (!Array.isArray(input.options) || input.options.length < 2) {
-      throw new PingRoomError('`options` must have at least 2 entries for a question handoff.', {
+    if (!Array.isArray(input.options) || input.options.length < 2 || input.options.length > 4) {
+      throw new PingRoomError('`options` must contain between 2 and 4 entries for a question handoff.', {
         code: 'invalid_request',
       });
     }
@@ -438,7 +439,7 @@ class HandoffsApi {
     }
   }
 
-  /** List the agent's handoffs, optionally filtered to open ones. */
+  /** List the agent's open handoffs or bounded recent history. */
   async list(input: ListHandoffsInput = {}): Promise<Handoff[]> {
     const res = await this.http.request<{ handoffs: Handoff[] }>('GET', '/api/agent/handoffs', {
       query: dropUndefined({ state: input.state }),
@@ -475,6 +476,16 @@ class HandoffsApi {
       body,
       ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
     });
+  }
+}
+
+/** One-call activation of the bound human's private Agent Inbox. */
+class InboxApi {
+  constructor(private readonly http: HttpClient) {}
+
+  /** Idempotently create/resolve the inbox and deliver its one-time test Question. */
+  ensure(): Promise<AgentInboxEnsureResult> {
+    return this.http.request('POST', '/api/agent/inbox/ensure', { body: {} });
   }
 }
 
@@ -520,6 +531,7 @@ export class PingRoom {
   readonly approvals: ApprovalsApi;
   readonly questions: QuestionsApi;
   readonly handoffs: HandoffsApi;
+  readonly inbox: InboxApi;
   readonly profile: ProfileApi;
   readonly directory: DirectoryApi;
   readonly mcp: McpClient;
@@ -545,6 +557,7 @@ export class PingRoom {
     this.approvals = new ApprovalsApi(this.http);
     this.questions = new QuestionsApi(this.http);
     this.handoffs = new HandoffsApi(this.http);
+    this.inbox = new InboxApi(this.http);
     this.profile = new ProfileApi(this.http);
     this.directory = new DirectoryApi(this.http);
     this.mcp = new McpClient(this.http);

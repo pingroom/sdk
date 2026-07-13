@@ -17,19 +17,23 @@ export interface ApiErrorBody {
  * The machine `code`s a handoff create/read can surface on a {@link PingRoomError}.
  * Branch on `error.code` (and `error.status`) instead of the message:
  *
- *   422 `feature_temporarily_unavailable` — handoffs disabled for this account.
- *   422 `handoff_room_unsupported`        — target room can't host a handoff.
- *   409 `recipient_not_ready`             — the human's device can't act (legacy-only).
- *   409 `idempotency_conflict`            — Idempotency-Key reused with a different body.
- *   503 `capability_check_unavailable`    — device-capability check couldn't run; retry.
- *   403 (scope/permission)               — missing `pingroom:handoffs:create` or not reachable.
+ * Authentication and schema-validation failures may have no machine code; use
+ * `status` for those responses. This union covers every coded Handoff response.
  */
 export type HandoffErrorCode =
   | 'feature_temporarily_unavailable'
   | 'handoff_room_unsupported'
+  | 'invalid_target'
+  | 'target_not_found'
+  | 'target_unavailable'
+  | 'pings_closed'
+  | 'not_room_member'
   | 'recipient_not_ready'
   | 'idempotency_conflict'
-  | 'capability_check_unavailable';
+  | 'invalid_idempotency_key'
+  | 'capability_check_unavailable'
+  | 'insufficient_scope'
+  | 'free_limit_reached';
 
 export interface PingRoomErrorInit {
   status?: number;
