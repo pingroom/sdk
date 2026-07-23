@@ -33,6 +33,17 @@ export type {
   IncomingWebhookResult,
 } from './webhooks.js';
 
+export { liveActivity } from './liveActivity.js';
+export type {
+  LiveActivityTemplate,
+  LiveActivityStatus,
+  LiveActivityMetric,
+  LiveActivityOption,
+  LiveActivitySide,
+  LiveActivityIdentity,
+  LiveActivityData,
+} from './liveActivity.js';
+
 export { VERSION } from './version.js';
 
 export type * from './types.js';
