@@ -33,6 +33,9 @@ export type {
   IncomingWebhookResult,
 } from './webhooks.js';
 
+export { linkPing } from './linkPing.js';
+export type { LinkPingInput, LinkPingData } from './linkPing.js';
+
 export { liveActivity } from './liveActivity.js';
 export type {
   LiveActivityTemplate,

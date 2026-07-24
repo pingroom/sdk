@@ -31,6 +31,21 @@ await pr.broadcast('ab12cd', {
 await pr.agents.ping('agt_reviewer', { message: 'PR #42 ready', correlation_id: 'pr-42' });
 ```
 
+### Link pings
+
+A ping becomes a tappable link button when its `data` carries the reserved
+keys `url` (absolute http(s), ≤ 2048 chars) and optional `button_label`
+(≤ 26 chars). The `linkPing()` helper builds and validates that fragment:
+
+```ts
+import { PingRoom, linkPing } from '@pingroom/sdk';
+
+await pr.broadcast('ab12cd', {
+  message: 'Build 512 ready',
+  data: { commit: 'abc123', ...linkPing({ url: 'https://ci.example.com/b/512', buttonLabel: 'Open build' }) },
+});
+```
+
 > Security note: an agent credential is a bearer token. Keep it server-side. Do not embed a long-lived token in a browser bundle or a public client.
 
 ## Authentication
@@ -236,6 +251,21 @@ await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL, {
   ack_timeout_seconds: 300,
 }, { idempotencyKey: 'build-42' });
 ```
+
+### Live Activities (live-status streams)
+
+Live Activities (iOS Lock Screen / Dynamic Island progress cards) are driven **only through incoming webhooks**: send a flat `live_status` object inside the webhook's `data` — `{ state: 'running' | 'done' | 'failed', template, progress, steps, correlation_id, ... }`. The first `running` ping for a `correlation_id` starts the activity, later ones update it in place, and `done`/`failed` ends it with a completion alert. Full contract: https://pingroom.io/liveactivities.md
+
+```ts
+await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL, {
+  message: 'Deploying v1.4.0',
+  data: {
+    live_status: { state: 'running', template: 'progress', progress: 0.4, correlation_id: 'deploy-42' },
+  },
+});
+```
+
+A `live_activity` block inside a `broadcast()` `data` object is carried as opaque structured data and does not start an activity — the exported `liveActivity` builders produce the native push-layer shape for tests/tooling, not an agent-API input.
 
 ## Verifying outgoing webhooks
 

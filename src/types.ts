@@ -157,6 +157,11 @@ export interface PingInput {
   message: string;
   action_number?: number;
   action_icon?: string;
+  /**
+   * Structured data echoed on every read surface (<= 25 keys / 8KB).
+   * Reserved keys `url` + `button_label` make the ping a tappable link —
+   * see the `linkPing()` helper.
+   */
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
