@@ -6,14 +6,70 @@ import { verifyWebhookSignature, sendIncomingWebhook, PingRoomError } from '../d
 const secret = 'whsec_test_123';
 const rawBody = JSON.stringify({ event: 'ping', notification_id: 'n1', message: 'hi' });
 const timestamp = String(Math.floor(Date.now() / 1000));
+const deliveryId = 'delivery-test-1';
 const hex = createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
+const v2Hex = createHmac('sha256', secret)
+  .update(`v2\n${timestamp}\n${deliveryId}\n${rawBody}`)
+  .digest('hex');
 
-test('verifyWebhookSignature accepts a valid sha256= signature', async () => {
+test('verifyWebhookSignature falls back to a valid legacy sha256= signature', async () => {
   assert.equal(await verifyWebhookSignature({ payload: rawBody, signature: `sha256=${hex}`, timestamp, secret }), true);
 });
 
-test('verifyWebhookSignature accepts bare hex without prefix', async () => {
+test('verifyWebhookSignature falls back to legacy bare hex without prefix', async () => {
   assert.equal(await verifyWebhookSignature({ payload: rawBody, signature: hex, timestamp, secret }), true);
+});
+
+test('verifyWebhookSignature accepts a delivery-bound v2 signature', async () => {
+  assert.equal(await verifyWebhookSignature({
+    payload: rawBody,
+    signatureV2: v2Hex,
+    timestamp,
+    deliveryId,
+    secret,
+  }), true);
+});
+
+test('verifyWebhookSignature does not downgrade to valid v1 when a supplied v2 signature fails', async () => {
+  assert.equal(await verifyWebhookSignature({
+    payload: rawBody,
+    signature: hex,
+    signatureV2: '0'.repeat(64),
+    timestamp,
+    deliveryId,
+    secret,
+  }), false);
+});
+
+test('changing only the delivery id invalidates v2 but not legacy v1', async () => {
+  assert.equal(await verifyWebhookSignature({
+    payload: rawBody,
+    signature: hex,
+    timestamp,
+    deliveryId: 'delivery-tampered',
+    secret,
+  }), true);
+  assert.equal(await verifyWebhookSignature({
+    payload: rawBody,
+    signature: hex,
+    signatureV2: v2Hex,
+    timestamp,
+    deliveryId: 'delivery-tampered',
+    secret,
+  }), false);
+});
+
+test('verifyWebhookSignature requires a safe delivery id whenever v2 is supplied', async () => {
+  for (const invalidDeliveryId of [undefined, '', 'delivery\ninjected']) {
+    assert.equal(await verifyWebhookSignature({
+      payload: rawBody,
+      signature: hex,
+      signatureV2: v2Hex,
+      timestamp,
+      deliveryId: invalidDeliveryId,
+      secret,
+    }), false);
+  }
 });
 
 test('verifyWebhookSignature accepts a Uint8Array payload', async () => {
@@ -23,11 +79,22 @@ test('verifyWebhookSignature accepts a Uint8Array payload', async () => {
 
 test('verifyWebhookSignature preserves non-UTF-8 raw body bytes', async () => {
   const bytes = Uint8Array.from([0xff, 0xfe, 0x00, 0x61]);
-  const byteHex = createHmac('sha256', secret)
+  const byteHexV1 = createHmac('sha256', secret)
     .update(Buffer.from(`${timestamp}.`))
     .update(bytes)
     .digest('hex');
-  assert.equal(await verifyWebhookSignature({ payload: bytes, signature: byteHex, timestamp, secret }), true);
+  const byteHexV2 = createHmac('sha256', secret)
+    .update(Buffer.from(`v2\n${timestamp}\n${deliveryId}\n`))
+    .update(bytes)
+    .digest('hex');
+  assert.equal(await verifyWebhookSignature({ payload: bytes, signature: byteHexV1, timestamp, secret }), true);
+  assert.equal(await verifyWebhookSignature({
+    payload: bytes,
+    signatureV2: byteHexV2,
+    timestamp,
+    deliveryId,
+    secret,
+  }), true);
 });
 
 test('verifyWebhookSignature rejects a tampered body', async () => {
@@ -47,6 +114,14 @@ test('verifyWebhookSignature rejects missing or malformed signatures', async () 
   assert.equal(await verifyWebhookSignature({ payload: rawBody, signature: undefined, timestamp, secret }), false);
   assert.equal(await verifyWebhookSignature({ payload: rawBody, signature: '', timestamp, secret }), false);
   assert.equal(await verifyWebhookSignature({ payload: rawBody, signature: 'sha256=zzzz', timestamp, secret }), false);
+  assert.equal(await verifyWebhookSignature({
+    payload: rawBody,
+    signature: hex,
+    signatureV2: 'sha256=zzzz',
+    timestamp,
+    deliveryId,
+    secret,
+  }), false);
 });
 
 test('verifyWebhookSignature enforces the default and custom replay windows', async () => {

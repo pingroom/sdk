@@ -269,13 +269,20 @@ A `live_activity` block inside a `broadcast()` `data` object is carried as opaqu
 
 ## Verifying outgoing webhooks
 
-When PingRoom POSTs an event to *your* server, verify it before trusting it. The signed string is `` `${timestamp}.${rawBody}` `` and the lower-case hex HMAC is sent in `X-PingRoom-Signature`; `timestamp` is the Unix-seconds value in `X-PingRoom-Timestamp`. **Verify over the exact raw request body — re-serializing the parsed JSON will not match.** The helper rejects timestamps outside a five-minute replay window by default; set `maxAgeSeconds` to customize that window.
+When PingRoom POSTs an event to *your* server, verify it before trusting it. New deliveries carry two lower-case hex HMAC-SHA256 headers:
+
+- `X-PingRoom-Signature-V2` signs `` `v2\n${timestamp}\n${deliveryId}\n${rawBody}` `` and binds `X-PingRoom-Delivery` as well as the timestamp and body.
+- `X-PingRoom-Signature` keeps the legacy `` `${timestamp}.${rawBody}` `` contract so existing receivers continue to work.
+
+`timestamp` is the Unix-seconds value in `X-PingRoom-Timestamp`, and `deliveryId` is the exact `X-PingRoom-Delivery` value. **Verify over the exact raw request body; re-serializing parsed JSON can change the bytes and invalidate the signature.** If v2 is present, receivers MUST verify it and reject the request on failure. The helper accepts legacy v1 only when v2 is absent. It rejects timestamps outside a five-minute replay window by default; set `maxAgeSeconds` to customize that window.
 
 ```ts
 import {
   verifyWebhookSignature,
   WEBHOOK_SIGNATURE_HEADER,
+  WEBHOOK_SIGNATURE_V2_HEADER,
   WEBHOOK_TIMESTAMP_HEADER,
+  WEBHOOK_DELIVERY_HEADER,
 } from '@pingroom/sdk';
 
 // Express example — capture the raw body (e.g. express.raw())
@@ -283,7 +290,9 @@ app.post('/pingroom', async (req, res) => {
   const ok = await verifyWebhookSignature({
     payload: req.body,                          // a Buffer/string of the RAW body
     signature: req.get(WEBHOOK_SIGNATURE_HEADER),
+    signatureV2: req.get(WEBHOOK_SIGNATURE_V2_HEADER),
     timestamp: req.get(WEBHOOK_TIMESTAMP_HEADER),
+    deliveryId: req.get(WEBHOOK_DELIVERY_HEADER),
     secret: process.env.PINGROOM_SIGNING_SECRET,
   });
   if (!ok) return res.status(401).end();

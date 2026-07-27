@@ -2,10 +2,9 @@
  * Webhook helpers — usable standalone, no client/token required.
  *
  *  - verifyWebhookSignature: verify an OUTGOING webhook PingRoom sent you.
- *    PingRoom signs `HMAC-SHA256(signing_secret, timestamp + "." + rawBody)`
- *    and sends the timestamp and lower-case hex signature in the PingRoom
- *    headers. Verify over the EXACT raw request body bytes — re-serializing the
- *    parsed JSON will not match.
+ *    New deliveries carry both the legacy timestamp/body HMAC and a v2 HMAC
+ *    that also binds the delivery ID. Verify over the EXACT raw request body
+ *    bytes — re-serializing the parsed JSON will not match.
  *
  *  - sendIncomingWebhook: fire a room's INCOMING webhook (the URL carries its
  *    own secret, so no agent token is needed) — the one-line CI/deploy ping.
@@ -19,6 +18,7 @@ import type { ActionState, FetchLike, JsonObject } from './types.js';
 import { VERSION } from './version.js';
 
 export const WEBHOOK_SIGNATURE_HEADER = 'X-PingRoom-Signature';
+export const WEBHOOK_SIGNATURE_V2_HEADER = 'X-PingRoom-Signature-V2';
 export const WEBHOOK_TIMESTAMP_HEADER = 'X-PingRoom-Timestamp';
 export const WEBHOOK_DELIVERY_HEADER = 'X-PingRoom-Delivery';
 export const WEBHOOK_EVENT_HEADER = 'X-PingRoom-Event';
@@ -26,10 +26,14 @@ export const WEBHOOK_EVENT_HEADER = 'X-PingRoom-Event';
 export interface VerifyWebhookSignatureOptions {
   /** The raw request body — the exact bytes received, NOT a re-stringified object. */
   payload: string | ArrayBuffer | Uint8Array;
-  /** The X-PingRoom-Signature header value (with or without the `sha256=` prefix). */
-  signature: string | null | undefined;
+  /** Legacy X-PingRoom-Signature value (with or without the `sha256=` prefix). */
+  signature?: string | null;
+  /** X-PingRoom-Signature-V2 value. When present, v2 MUST verify; v1 is not tried. */
+  signatureV2?: string | null;
   /** The X-PingRoom-Timestamp header value (Unix seconds). */
   timestamp: string | number | null | undefined;
+  /** X-PingRoom-Delivery value required by the v2 signed message. */
+  deliveryId?: string | null;
   /** The webhook's signing_secret. */
   secret: string;
   /** Allowed timestamp skew in seconds. Defaults to 300 (five minutes). */
@@ -41,7 +45,9 @@ export interface VerifyWebhookSignatureOptions {
  * boolean and never throws on mismatch.
  */
 export async function verifyWebhookSignature(opts: VerifyWebhookSignatureOptions): Promise<boolean> {
-  if (!opts.signature || !opts.secret) {
+  const hasV2Signature = opts.signatureV2 !== null && opts.signatureV2 !== undefined;
+  const selectedSignature = hasV2Signature ? opts.signatureV2 : opts.signature;
+  if (!selectedSignature || !opts.secret) {
     return false;
   }
   const timestamp = normalizeTimestamp(opts.timestamp);
@@ -55,11 +61,21 @@ export async function verifyWebhookSignature(opts: VerifyWebhookSignatureOptions
   if (Math.abs(Date.now() / 1000 - Number(timestamp)) > maxAgeSeconds) {
     return false;
   }
-  const provided = normalizeSignature(opts.signature).toLowerCase();
+  const provided = normalizeSignature(selectedSignature).toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(provided)) {
     return false;
   }
-  const expected = await hmacSha256Hex(opts.secret, signedMessage(timestamp, opts.payload));
+  let message: Uint8Array;
+  if (hasV2Signature) {
+    const deliveryId = normalizeDeliveryId(opts.deliveryId);
+    if (deliveryId === null) {
+      return false;
+    }
+    message = signedMessage(`v2\n${timestamp}\n${deliveryId}\n`, opts.payload);
+  } else {
+    message = signedMessage(`${timestamp}.`, opts.payload);
+  }
+  const expected = await hmacSha256Hex(opts.secret, message);
   return timingSafeEqualHex(provided, expected);
 }
 
@@ -179,9 +195,15 @@ function normalizeTimestamp(timestamp: string | number | null | undefined): stri
   return Number.isSafeInteger(seconds) ? normalized : null;
 }
 
-function signedMessage(timestamp: string, payload: string | ArrayBuffer | Uint8Array): Uint8Array {
+function normalizeDeliveryId(deliveryId: string | null | undefined): string | null {
+  return typeof deliveryId === 'string' && /^[\x21-\x7e]{1,255}$/.test(deliveryId)
+    ? deliveryId
+    : null;
+}
+
+function signedMessage(prefixText: string, payload: string | ArrayBuffer | Uint8Array): Uint8Array {
   const enc = new TextEncoder();
-  const prefix = enc.encode(`${timestamp}.`);
+  const prefix = enc.encode(prefixText);
   const body = typeof payload === 'string'
     ? enc.encode(payload)
     : payload instanceof Uint8Array
