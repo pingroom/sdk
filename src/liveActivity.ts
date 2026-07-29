@@ -1,22 +1,22 @@
 /**
  * Live Activity template builders for the PingRoom agent SDK.
  *
- * IMPORTANT — how Live Activities are actually created: the server starts,
- * updates, and ends Live Activities only from **incoming-webhook live-status
- * streams** — a flat `live_status` object inside the webhook's `data`
- * (`{ state, template, progress, steps, correlation_id, ... }`; see
- * https://pingroom.io/liveactivities.md). A `live_activity` block placed in a
- * `broadcast()` / `ping()` `data` object is carried as opaque structured data
- * and does NOT start an activity — clients only honor the server-built,
- * top-level `live_activity` push block.
+ * IMPORTANT — these builders do NOT start an activity. The server starts,
+ * updates, and ends Live Activities only from a **live-status stream**: a
+ * `live_status` object sent either to a room's incoming webhook or to the agent
+ * route (see https://pingroom.io/liveactivities.md). A `live_activity` block
+ * placed in a `broadcast()` / `ping()` `data` object is carried as opaque
+ * structured data — clients only honor the server-built, top-level
+ * `live_activity` push block.
  *
  * These builders produce that `{ attributes, content_state }` block in the
  * frozen native shape (mobile/modules/live-activity/src/LiveActivity.types.ts,
  * LIVE_ACTIVITY_TEMPLATES.md). Use them when you need the native contract —
  * e.g. constructing expected payloads in tests or tooling that speaks the
- * push-layer shape — not as a way to launch an activity through the agent API.
- * To drive a Live Activity as an agent, send `data.live_status` on a room's
- * incoming webhook instead.
+ * push-layer shape.
+ *
+ * To actually drive a Live Activity, use `liveStatus.*` + `pr.live.push()`
+ * (agent credential, `pingroom:live:write`) or `sendIncomingWebhook()`.
  */
 
 export type LiveActivityTemplate =

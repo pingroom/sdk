@@ -2,6 +2,7 @@ import { PingRoomError } from './errors.js';
 import { HttpClient } from './http.js';
 import { sleep } from './internal/async.js';
 import { assertActionNumber, assertStructuredData, requireNonEmpty } from './internal/guards.js';
+import type { LiveStatusPing, LiveStatusResult, LiveStatusSnapshot } from './liveStatus.js';
 import { McpClient } from './mcp.js';
 import type {
   AcknowledgementWaitResult,
@@ -504,6 +505,47 @@ class ProfileApi {
   }
 }
 
+/**
+ * Live-status streams — a self-updating card on the room members' lock screen.
+ *
+ * Requires the `pingroom:live:write` scope. Free accounts get a small daily
+ * budget of NEW streams; updates and the terminal ping are never charged, so a
+ * card can never be quota-blocked into hanging open.
+ */
+class LiveApi {
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * Send one stream ping — start, update, or end, chosen by `live_status.state`
+   * and whether the correlation already exists.
+   */
+  push(inviteCode: string, ping: LiveStatusPing): Promise<LiveStatusResult> {
+    requireNonEmpty(inviteCode, 'inviteCode');
+    requireNonEmpty(ping.correlation_id, 'correlation_id');
+    assertStructuredData(ping.data);
+    return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/live`, { body: ping });
+  }
+
+  /**
+   * Read back a stream this credential started, so a restarted producer can
+   * reconcile instead of opening a duplicate. Returns null when there is no
+   * such stream in the last 24 hours.
+   */
+  async get(inviteCode: string, correlationId: string): Promise<LiveStatusSnapshot | null> {
+    requireNonEmpty(inviteCode, 'inviteCode');
+    requireNonEmpty(correlationId, 'correlationId');
+    try {
+      return await this.http.request<LiveStatusSnapshot>(
+        'GET',
+        `/api/agent/rooms/${enc(inviteCode)}/live/${enc(correlationId)}`,
+      );
+    } catch (error) {
+      if (error instanceof PingRoomError && error.status === 404) return null;
+      throw error;
+    }
+  }
+}
+
 /** Public, unauthenticated agent directory. */
 class DirectoryApi {
   constructor(private readonly http: HttpClient) {}
@@ -532,6 +574,7 @@ export class PingRoom {
   readonly questions: QuestionsApi;
   readonly handoffs: HandoffsApi;
   readonly inbox: InboxApi;
+  readonly live: LiveApi;
   readonly profile: ProfileApi;
   readonly directory: DirectoryApi;
   readonly mcp: McpClient;
@@ -558,6 +601,7 @@ export class PingRoom {
     this.questions = new QuestionsApi(this.http);
     this.handoffs = new HandoffsApi(this.http);
     this.inbox = new InboxApi(this.http);
+    this.live = new LiveApi(this.http);
     this.profile = new ProfileApi(this.http);
     this.directory = new DirectoryApi(this.http);
     this.mcp = new McpClient(this.http);
