@@ -188,6 +188,19 @@ export const liveStatus = {
     return ping(correlationId, { template: 'matchup', ...live }, rest);
   },
 
+  /**
+   * An urgent stream, delivered time-sensitive from the start so it breaks
+   * through Focus.
+   *
+   * This is a `category`, not a `template`: `alert` has no template equivalent,
+   * and it is the only way to start time-sensitive WITHOUT also setting
+   * `requires_ack` (which demands somebody tap). Fixed at creation, like
+   * `template`.
+   */
+  alert(correlationId: string, live: Omit<LiveStatus, 'template' | 'category'>, rest?: Rest): LiveStatusPing {
+    return ping(correlationId, { category: 'alert', ...live }, rest);
+  },
+
   /** Finish a stream. The one alert your stream earns. */
   done(correlationId: string, message?: string, rest?: Rest): LiveStatusPing {
     return ping(correlationId, { state: 'done', ...(message ? { message } : {}) }, rest);
