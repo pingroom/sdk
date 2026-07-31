@@ -252,20 +252,106 @@ await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL, {
 }, { idempotencyKey: 'build-42' });
 ```
 
-### Live Activities (live-status streams)
+### Live Activities from a webhook
 
-Live Activities (iOS Lock Screen / Dynamic Island progress cards) are driven **only through incoming webhooks**: send a flat `live_status` object inside the webhook's `data` — `{ state: 'running' | 'done' | 'failed', template, progress, steps, correlation_id, ... }`. The first `running` ping for a `correlation_id` starts the activity, later ones update it in place, and `done`/`failed` ends it with a completion alert. Full contract: https://pingroom.io/liveactivities.md
+See [Live Activities](#live-activities) below for the full picture. From a webhook, put `live_status` at the **top level** of the payload:
 
 ```ts
 await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL, {
   message: 'Deploying v1.4.0',
-  data: {
-    live_status: { state: 'running', template: 'progress', progress: 0.4, correlation_id: 'deploy-42' },
-  },
+  correlation_id: 'deploy-42',
+  live_status: { state: 'running', template: 'progress', progress: 0.4 },
 });
 ```
 
-A `live_activity` block inside a `broadcast()` `data` object is carried as opaque structured data and does not start an activity — the exported `liveActivity` builders produce the native push-layer shape for tests/tooling, not an agent-API input.
+> **Not inside `data`.** The server routes on a top-level `live_status` and *strips* the key from `data` so a legacy caller cannot spoof completion alerts. A nested `data.live_status` silently sends an ordinary ping and still answers `success: true`. (SDK versions before 0.3.1 dropped `live_status` from the request body entirely — upgrade.)
+
+## Live Activities
+
+A **live-status stream** is one thing being tracked, keyed by your `correlation_id`. The first ping starts a self-updating card on every room member's Lock Screen (iOS Live Activity / Dynamic Island, Android ongoing live update, and a full inline card in the app). Later `running` pings move it **silently** — no new notification. The first `done`/`failed` sends one completion alert and ends it.
+
+Protocol: <https://pingroom.io/liveactivities.md> (v1.2).
+
+### Two ways to send one
+
+```ts
+import { PingRoom, liveStatus, sendIncomingWebhook } from '@pingroom/sdk';
+
+// A. Agent credential — needs the `pingroom:live:write` scope.
+const pr = new PingRoom({ token: process.env.PINGROOM_TOKEN });
+await pr.live.push('AB12CD', liveStatus.progress('deploy-42', {
+  state: 'running',
+  message: 'Building image',
+  progress: 0.4,
+}));
+
+// B. A room's incoming webhook (Pro) — no token. The builder returns
+// { correlation_id, live_status }, which is exactly the webhook body.
+await sendIncomingWebhook(
+  process.env.PINGROOM_WEBHOOK_URL,
+  liveStatus.progress('deploy-42', {
+    state: 'running',
+    message: 'Building image',
+    progress: 0.4,
+  }),
+);
+```
+
+There is a third producer — a person driving a stream from the app composer over `POST /api/rooms/{code}/live` with their own JWT — but that is a Human JWT route and is not part of this agent SDK.
+
+### Templates
+
+`template` is fixed at stream creation; a later ping cannot re-template a running card. Content set at creation is **sticky**, so a sparse update carrying just `progress` keeps rendering the full template — and so does the terminal leg, so a bare `{ state: 'done' }` ends the activity on the finished card rather than an empty one.
+
+| Builder | Renders |
+|---|---|
+| `liveStatus.status` | Title, message, optional progress |
+| `liveStatus.steps` | Segmented tracker; `steps` (2–8 labels) required on the first ping and immutable after |
+| `liveStatus.progress` | Determinate bar with optional `eta_at` |
+| `liveStatus.metrics` | Up to 3 `{label, value}` counters |
+| `liveStatus.countdown` | Large live timer to `deadline_at` |
+| `liveStatus.question` | `prompt` + up to 4 `{value, label}` options on the lock screen |
+| `liveStatus.matchup` | `left` / `center` / `right` — a score or A-vs-B |
+
+```ts
+await pr.live.push('AB12CD', liveStatus.steps('release-7', {
+  state: 'running',
+  steps: ['Build', 'Test', 'Deploy', 'Verify'],
+  current_step: 2,
+  message: 'Deploying to prod',
+}));
+
+await pr.live.push('AB12CD', liveStatus.matchup('game-3', {
+  state: 'running',
+  left: { label: 'ARS', value: '2' },
+  right: { label: 'CHE', value: '1' },
+  center: "68'",
+}));
+```
+
+### Ending and reading back
+
+```ts
+// Always end a stream. `done`/`failed` is never rate-limited or quota-blocked,
+// so a card can't be metered into hanging open on a lock screen.
+await pr.live.push('AB12CD', liveStatus.done('deploy-42', 'Shipped v1.4.0'));
+// ...or liveStatus.failed('deploy-42', 'Rollback triggered')
+
+// Reconcile after a restart instead of opening a duplicate.
+// Returns null (not a throw) when there is no such stream in the last 24 hours.
+const snap = await pr.live.get('AB12CD', 'deploy-42');
+if (snap) console.log(snap.template, snap.current_step, snap.updated_at);
+```
+
+`get()` returns **every** stored field (`state`, `progress`, `message`, `category`, `template`, `agent_id`, `accent_override`, `eta_at`, `deadline_at`, `metrics`, `prompt`, `options`, `left`, `right`, `center`, `steps`, `current_step`) plus `action_state` and `updated_at`. Fields you never set come back as `null`, not omitted.
+
+### Ownership and limits
+
+A stream belongs to the credential that started it. An agent can never advance a webhook's stream or another registration's, even under the same `correlation_id`. Updates are throttled to ~6/min per correlation and 10 new streams/min per producer; free agent accounts get 5 new streams/day (`402 free_limit_reached`). Creation is the only charged leg.
+
+### `liveActivity.*` is not this
+
+The exported `liveActivity.*` builders produce the frozen **native** `{ attributes, content_state }` push-layer shape for tests and tooling. No endpoint accepts them as input, and a `live_activity` block inside a `broadcast()` `data` object is carried as opaque structured data — it starts nothing. Use `liveStatus.*` to drive a real activity.
 
 ## Verifying outgoing webhooks
 

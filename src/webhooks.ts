@@ -8,12 +8,14 @@
  *
  *  - sendIncomingWebhook: fire a room's INCOMING webhook (the URL carries its
  *    own secret, so no agent token is needed) — the one-line CI/deploy ping.
+ *    Pass a top-level `live_status` to drive a Live Activity instead.
  */
 
 import { PingRoomError } from './errors.js';
 import { combineSignals } from './internal/async.js';
 import { assertActionNumber, assertStructuredData } from './internal/guards.js';
 import { assertSecureUrl } from './internal/url.js';
+import type { LiveStatus } from './liveStatus.js';
 import type { ActionState, FetchLike, JsonObject } from './types.js';
 import { VERSION } from './version.js';
 
@@ -87,6 +89,16 @@ export interface IncomingWebhookPayload {
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
+  /**
+   * Drive a Live Activity through this webhook. MUST be top-level — the server
+   * detects `live_status` on the request body, and strips it from `data` so a
+   * legacy-path caller cannot spoof completion alerts. Sending it nested under
+   * `data` silently produces an ordinary ping, not a stream.
+   *
+   * Requires `correlation_id`. Build it with the `liveStatus.*` helpers.
+   * See https://pingroom.io/liveactivities.md
+   */
+  live_status?: LiveStatus;
   /** Override the selected quick action and require acknowledgement for this ping. */
   requires_ack?: boolean;
   /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. */
@@ -128,6 +140,11 @@ export async function sendIncomingWebhook(
   if (payload.data !== undefined) body.data = payload.data;
   if (payload.correlation_id !== undefined) body.correlation_id = payload.correlation_id;
   if (payload.reply_to !== undefined) body.reply_to = payload.reply_to;
+  // Top level, never folded into `data` — the server routes on this key and
+  // strips it from `data`. Omitting it from this whitelist (the pre-0.3.1 bug)
+  // posted only `{correlation_id}`, fell into the legacy webhook branch, and
+  // returned `success: true` having created no activity at all.
+  if (payload.live_status !== undefined) body.live_status = payload.live_status;
   if (payload.requires_ack !== undefined) body.requires_ack = payload.requires_ack;
   if (payload.ack_timeout_seconds !== undefined) body.ack_timeout_seconds = payload.ack_timeout_seconds;
 

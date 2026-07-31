@@ -6,9 +6,15 @@
  * silently, and the first `done`/`failed` sends one completion alert and ends
  * it. See https://pingroom.io/liveactivities.md.
  *
- * Two producers speak this contract:
+ * Three producers speak this contract. This SDK reaches the two machine ones:
  *   - a room's **incoming webhook** (Pro) — `sendIncomingWebhook()`
  *   - an **agent credential** — `pr.live.*` (needs `pingroom:live:write`)
+ *
+ * The third is a signed-in person driving a stream from the app composer over
+ * `POST /api/rooms/{inviteCode}/live` with their own Human JWT. It sends this
+ * same body minus `live_status.agent_id` (stripped server-side), so these
+ * builders describe it too — but it is not an agent route and has no client
+ * here.
  *
  * Not to be confused with `liveActivity.*` in ./liveActivity.ts, which builds
  * the frozen *native* `{ attributes, content_state }` push shape for tests and
@@ -44,7 +50,9 @@ export interface LiveStatusSide {
  *
  * `template` and `steps` are fixed at stream creation — a later ping cannot
  * re-template a running card. Content set at creation is sticky, so a sparse
- * update carrying just `progress` keeps rendering the full template.
+ * update carrying just `progress` keeps rendering the full template. The
+ * terminal leg is sticky too: `{ state: 'done' }` alone keeps the scoreboard,
+ * metrics grid, deadline and accent on the final frame.
  */
 export interface LiveStatus {
   state: LiveStatusState;
@@ -96,16 +104,39 @@ export interface LiveStatusResult {
   action_state?: unknown;
 }
 
+/**
+ * The read-back shape from `GET .../live/{correlationId}`.
+ *
+ * EVERY stored `live_status` field is returned, not a step/progress subset — a
+ * `matchup` / `metrics` / `countdown` / `question` stream would otherwise be
+ * unresumable after a producer restart. Fields you never set come back as
+ * `null` rather than being omitted, so read them defensively.
+ *
+ * The server-side ownership stamps (`_webhook` / `_agent` / `_user`) are
+ * deliberately NOT returned — they are the authorization record, not client
+ * state.
+ */
 export interface LiveStatusSnapshot {
   notification_id: string;
   correlation_id: string;
   state: string | null;
   progress: number | null;
   message: string | null;
-  template: LiveActivityTemplate | null;
   category: LiveStatusCategory | null;
+  template: LiveActivityTemplate | null;
+  agent_id: string | null;
+  accent_override: string | null;
+  eta_at: number | null;
+  deadline_at: number | null;
+  metrics: LiveStatusMetric[] | null;
+  prompt: string | null;
+  options: LiveStatusOption[] | null;
+  left: LiveStatusSide | null;
+  right: LiveStatusSide | null;
+  center: string | null;
   steps: string[] | null;
   current_step: number | null;
+  action_state?: unknown;
   updated_at: string | null;
 }
 
