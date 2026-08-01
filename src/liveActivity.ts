@@ -55,7 +55,7 @@ export interface LiveActivitySide {
 export interface LiveActivityIdentity {
   roomCode: string;
   roomName: string;
-  /** Hex accent — the palette room color, or brand red `#e53d30`. */
+  /** Hex accent — the palette room color, or brand red `#e33122`. */
   roomColor: string;
   roomIconSvg?: string;
   /** Reuse across updates to target the same activity; also links agent replies. */

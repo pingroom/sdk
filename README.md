@@ -77,7 +77,7 @@ Generic MCP clients (Cursor, Claude Desktop, Claude Code) should use the standar
 ```ts
 await pr.rooms.list();
 await pr.rooms.get('ab12cd');
-await pr.rooms.create({ name: 'Deploys', icon: 'rocket', color: '#e53d30' });
+await pr.rooms.create({ name: 'Deploys', icon: 'rocket', color: '#e33122' });
 await pr.rooms.join({ invite_code: 'ab12cd' });
 
 await pr.actions.update('ab12cd', 1, { label: 'Approve', icon: 'check' });
