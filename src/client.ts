@@ -258,7 +258,11 @@ class NotificationsApi {
 class AgentsApi {
   constructor(private readonly http: HttpClient) {}
 
-  /** Direct agent-to-agent ping, addressed by the target's handle. */
+  /**
+   * @deprecated Retired server-side — always fails with 410
+   * `cross_account_ping_retired`. An agent can only reach the account that
+   * connected it; to reach anyone else, post into a room you both belong to.
+   */
   ping(handle: string, ping: PingInput): Promise<DirectPingResult> {
     requireNonEmpty(handle, 'handle');
     assertPing(ping);
