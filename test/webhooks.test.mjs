@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { verifyWebhookSignature, sendIncomingWebhook, PingRoomError } from '../dist/index.js';
+import {
+  verifyWebhookSignature,
+  sendIncomingWebhook,
+  PingRoomError,
+  INCOMING_WEBHOOK_FIELDS,
+} from '../dist/index.js';
 
 const secret = 'whsec_test_123';
 const rawBody = JSON.stringify({ event: 'ping', notification_id: 'n1', message: 'hi' });
@@ -159,6 +164,64 @@ test('sendIncomingWebhook posts JSON and returns the result', async () => {
     requires_ack: true,
     ack_timeout_seconds: 120,
   });
+});
+
+// The allowlist that builds the request body has silently dropped fields twice
+// (live_status before 0.3.1, then emoji/icon/color/sound). Both were invisible:
+// the server accepts the truncated body and answers 200. These two tests pin the
+// list to the server contract so the next omission fails here instead of in
+// production.
+//
+// SERVER CONTRACT — WebhookController::trigger (laravel). If this list changes,
+// change INCOMING_WEBHOOK_FIELDS in src/webhooks.ts to match, in the same order.
+const SERVER_WEBHOOK_FIELDS = [
+  'title',
+  'message',
+  'action',
+  'emoji',
+  'icon',
+  'color',
+  'sound',
+  'data',
+  'correlation_id',
+  'reply_to',
+  'requires_ack',
+  'ack_timeout_seconds',
+  'live_status',
+];
+
+test('the incoming-webhook allowlist matches the server contract exactly', () => {
+  assert.deepEqual([...INCOMING_WEBHOOK_FIELDS], SERVER_WEBHOOK_FIELDS);
+});
+
+test('sendIncomingWebhook forwards every field the server accepts', async () => {
+  const payload = {
+    title: 'Build 512',
+    message: 'green',
+    action: 3,
+    emoji: '🚀',
+    icon: 'rocket',
+    color: '#e33122',
+    sound: 'ting',
+    data: { commit: 'abc123' },
+    correlation_id: 'c-1',
+    reply_to: 'r-1',
+    requires_ack: true,
+    ack_timeout_seconds: 300,
+    live_status: { state: 'running', template: 'status' },
+  };
+  // Every documented field must be exercised, or a dropped one slips past.
+  assert.deepEqual(Object.keys(payload).sort(), [...SERVER_WEBHOOK_FIELDS].sort());
+
+  let captured;
+  const fetchMock = async (url, init) => {
+    captured = init;
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  };
+  await sendIncomingWebhook('https://api.pingroom.io/api/webhooks/AB12/secret', payload, {
+    fetch: fetchMock,
+  });
+  assert.deepEqual(JSON.parse(captured.body), payload);
 });
 
 test('sendIncomingWebhook refuses an insecure URL', async () => {

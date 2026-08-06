@@ -86,6 +86,14 @@ export interface IncomingWebhookPayload {
   title?: string;
   /** Quick-action slot to attribute the ping to (1–4). */
   action?: number;
+  /** Per-ping emoji override (≤ 16 chars, so ZWJ sequences and skin tones fit). */
+  emoji?: string;
+  /** Per-ping catalog icon override — a v3 room-icon id, validated server-side. */
+  icon?: string;
+  /** Per-ping color override: 6-digit hex, optional leading `#`. */
+  color?: string;
+  /** Per-ping sound override — a canonical sound id (see constants/sounds.json). */
+  sound?: string;
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
@@ -123,6 +131,36 @@ export interface IncomingWebhookResult {
   [key: string]: unknown;
 }
 
+/**
+ * Every field the incoming-webhook endpoint accepts, in the server's own order
+ * (`WebhookController::trigger`'s validate block, plus `live_status`, which it
+ * detects before that block and routes to the stream handler).
+ *
+ * The request body is built by walking this list rather than a hand-written run
+ * of `if`s. That run silently dropped whatever nobody remembered to add to it:
+ * first `live_status` (pre-0.3.1 — posted only `{correlation_id}`, fell into the
+ * legacy webhook branch, and returned `success: true` having created no activity
+ * at all), then `emoji`/`icon`/`color`/`sound`. Exported so a test can fail the
+ * moment this list and the server contract diverge again.
+ */
+export const INCOMING_WEBHOOK_FIELDS = [
+  'title',
+  'message',
+  'action',
+  'emoji',
+  'icon',
+  'color',
+  'sound',
+  'data',
+  'correlation_id',
+  'reply_to',
+  'requires_ack',
+  'ack_timeout_seconds',
+  // Top level, never folded into `data` — the server routes on this key and
+  // strips it from `data` so a legacy-path caller cannot spoof completion alerts.
+  'live_status',
+] as const satisfies readonly (keyof IncomingWebhookPayload)[];
+
 /** POST to a room's incoming-webhook URL (which embeds the secret in its path). */
 export async function sendIncomingWebhook(
   webhookUrl: string,
@@ -134,19 +172,10 @@ export async function sendIncomingWebhook(
   assertStructuredData(payload.data);
 
   const body: Record<string, unknown> = {};
-  if (payload.message !== undefined) body.message = payload.message;
-  if (payload.title !== undefined) body.title = payload.title;
-  if (payload.action !== undefined) body.action = payload.action;
-  if (payload.data !== undefined) body.data = payload.data;
-  if (payload.correlation_id !== undefined) body.correlation_id = payload.correlation_id;
-  if (payload.reply_to !== undefined) body.reply_to = payload.reply_to;
-  // Top level, never folded into `data` — the server routes on this key and
-  // strips it from `data`. Omitting it from this whitelist (the pre-0.3.1 bug)
-  // posted only `{correlation_id}`, fell into the legacy webhook branch, and
-  // returned `success: true` having created no activity at all.
-  if (payload.live_status !== undefined) body.live_status = payload.live_status;
-  if (payload.requires_ack !== undefined) body.requires_ack = payload.requires_ack;
-  if (payload.ack_timeout_seconds !== undefined) body.ack_timeout_seconds = payload.ack_timeout_seconds;
+  for (const field of INCOMING_WEBHOOK_FIELDS) {
+    const value = payload[field];
+    if (value !== undefined) body[field] = value;
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

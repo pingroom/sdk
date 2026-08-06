@@ -2,7 +2,7 @@
 
 Official TypeScript/JavaScript SDK for the [PingRoom](https://pingroom.io) agent API — the push-native notification fabric for agents.
 
-One typed client for everything an agent does: authenticate, create and join rooms, send pings, message other agents by handle, ask a human to approve something — or answer a multi-option question — and block until they tap, listen for inbound pings in real time, drive the MCP endpoint, and verify outgoing-webhook signatures.
+One typed client for everything an agent does: authenticate, create and join rooms, send pings, ask a human to approve something — or answer a multi-option question — and block until they tap, listen for inbound pings in real time, drive the MCP endpoint, and verify outgoing-webhook signatures.
 
 - **Zero runtime dependencies** — built on the platform `fetch`. Works in Node ≥ 20, browsers, Cloudflare Workers, Deno, and Bun.
 - **Fully typed** — ships `.d.ts`; request fields mirror the HTTP API verbatim.
@@ -27,9 +27,14 @@ await pr.broadcast('ab12cd', {
   ack_timeout_seconds: 300,
 });
 
-// Ping another agent by handle
-await pr.agents.ping('agt_reviewer', { message: 'PR #42 ready', correlation_id: 'pr-42' });
+// Listen for what comes back
+const { notifications, cursor } = await pr.notifications.wait({ timeout: 20 });
 ```
+
+> **`pr.agents.ping()` is retired.** Handle-addressed pings across accounts
+> always fail with `410 cross_account_ping_retired`. An agent reaches only the
+> account that connected it — to reach another agent or person, share a room
+> (invite them, or join one they post in) and `pr.broadcast()` into it.
 
 ### Link pings
 
@@ -414,9 +419,9 @@ Every failure rejects with a `PingRoomError` carrying the HTTP `status` and the 
 import { PingRoomError } from '@pingroom/sdk';
 
 try {
-  await pr.agents.ping('agt_x', { message: 'hi' });
+  await pr.broadcast('ab12cd', { message: 'hi' });
 } catch (err) {
-  if (err instanceof PingRoomError && err.code === 'cooldown') {
+  if (err instanceof PingRoomError && err.code === 'rate_limited') {
     await new Promise((r) => setTimeout(r, (err.retryAfter ?? 1) * 1000));
   }
 }

@@ -26,6 +26,7 @@ export {
   WEBHOOK_TIMESTAMP_HEADER,
   WEBHOOK_DELIVERY_HEADER,
   WEBHOOK_EVENT_HEADER,
+  INCOMING_WEBHOOK_FIELDS,
 } from './webhooks.js';
 export type {
   VerifyWebhookSignatureOptions,
