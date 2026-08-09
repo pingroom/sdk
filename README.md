@@ -8,6 +8,11 @@ One typed client for everything an agent does: authenticate, create and join roo
 - **Fully typed** — ships `.d.ts`; request fields mirror the HTTP API verbatim.
 - **Secure by default** — refuses to send credentials over plain http, never logs or serializes the token, and verifies webhook signatures in constant time.
 
+> **Release status:** npm currently serves 0.3.1. App pairing and
+> `pr.inbox.activate()` are in the tested 0.4.0 release candidate on `main` and
+> must not be presented as installed behavior until 0.4.0 is published and
+> clean-install verified.
+
 ```bash
 npm install @pingroom/sdk
 ```
@@ -62,7 +67,7 @@ const pr = new PingRoom();
 
 const pairing = await pr.auth.startPairing({
   agent_label: 'Deploy bot',
-  scopes: ['pingroom:rooms:read', 'pingroom:broadcast:send'],
+  scopes: ['pingroom:rooms:read', 'pingroom:broadcast:send', 'pingroom:handoffs:create'],
 });
 
 console.log(`Open in PingRoom: ${pairing.pair_url}`);
@@ -74,8 +79,9 @@ await pr.broadcast(active.room.invite_code, { message: 'SDK connected ✅' });
 
 `waitForPairing()` tolerates short network outages and stops when the app link
 expires. Pass an `AbortSignal` when your process needs its own cancellation.
-If `scopes` is omitted, pairing requests room lookup and broadcast access; the
-approval screen still shows both grants before the user connects.
+If `scopes` is omitted, pairing requests room lookup, broadcast access, and
+`pingroom:handoffs:create` for private Handoffs and Agent Inbox activation. The
+approval screen shows every grant before the user connects.
 
 If you already manage credentials, bring an existing agent token or run the
 lower-level auth.md email flow:
@@ -218,13 +224,53 @@ A **handoff** is the direct, private version of the human-in-the-loop: it always
 
 Requires the `pingroom:handoffs:create` scope.
 
-On first connect, activate the human's private Agent Inbox. This is idempotent:
-it creates at most one inbox and one onboarding test Question.
+On first connect, explicitly activate the human's Agent Inbox. `activate()`
+replays the viable test Question or creates its next numbered retry in the
+designated delivery room, then waits for its terminal answer. It is deliberately
+separate from `auth.waitForPairing()`: pairing adopts the approved credential
+immediately and never silently blocks on the onboarding Question.
 
 ```ts
-const onboarding = await pr.inbox.ensure();
-console.log(onboarding.room.invite_code, onboarding.question.state);
+import { PingRoomActivationIncompleteError } from '@pingroom/sdk';
+
+const controller = new AbortController();
+try {
+  const activation = await pr.inbox.activate({
+    timeout: 20,                 // seconds per bounded server hold
+    overallTimeoutMs: 120_000,   // ensure + all holds; this is the default
+    signal: controller.signal,   // caller cancellation
+  });
+  // On supporting builds this proves native phone receipt before the answer,
+  // plus this agent observation—not just `question.state === 'answered'`.
+  console.log(activation.activation_completed); // true
+  console.log(`Agent Inbox ready: ${activation.question.answer.value}`);
+} catch (error) {
+  if (error instanceof PingRoomActivationIncompleteError) {
+    console.log(`Activation incomplete: ${error.reason}`);
+  }
+  throw error;
+}
 ```
+
+Pending long-poll responses are observed internally and polled again. The
+`timeout` option controls each bounded `GET /handoffs/{id}/wait` hold;
+`overallTimeoutMs` limits the whole ensure-and-wait composition and defaults to
+two minutes. Immediate observations are spaced by at least 2.1 seconds, keeping
+the loop below the wait route's 30-request-per-minute limit.
+
+A plain answer does not prove activation: `activate()` returns only when the
+wait response carries `activation_completed: true`. An answered response with a
+false or missing completion stamp is terminal and incomplete because a later
+callback cannot rewrite the required receipt-before-answer sequence. It throws
+`PingRoomActivationIncompleteError` immediately with reason
+`answered_without_completion`. Expiry and cancellation throw the same domain
+error with their corresponding reasons. Caller aborts reject with the signal's
+reason. None of these paths revoke or change the client's active credential.
+Network/API errors remain `PingRoomError`. Use
+`pr.inbox.ensure()` directly when you only want to create or inspect the
+onboarding Question without waiting. Call `activate()` again after an expired,
+cancelled, or `answered_without_completion` result; the server replays a viable
+attempt and creates one numbered retry for a terminal incomplete attempt.
 
 ```ts
 // Ask for an acknowledgement. Pass idempotencyKey so a retried create is a no-op.

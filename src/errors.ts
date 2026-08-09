@@ -102,3 +102,31 @@ export class PingRoomNetworkError extends PingRoomError {
     }
   }
 }
+
+export type AgentInboxActivationIncompleteReason =
+  | 'deadline_exceeded'
+  | 'answered_without_completion'
+  | 'expired'
+  | 'cancelled';
+
+/**
+ * The onboarding Question reached a non-activating terminal outcome, or the
+ * caller's overall activation deadline elapsed. The client's credential is not
+ * changed or revoked when this error is thrown.
+ */
+export class PingRoomActivationIncompleteError extends PingRoomError {
+  readonly reason: AgentInboxActivationIncompleteReason;
+
+  constructor(
+    reason: AgentInboxActivationIncompleteReason,
+    message: string,
+    details: Record<string, unknown> = {},
+  ) {
+    super(message, {
+      code: 'inbox_activation_incomplete',
+      body: { reason, ...details },
+    });
+    this.name = 'PingRoomActivationIncompleteError';
+    this.reason = reason;
+  }
+}

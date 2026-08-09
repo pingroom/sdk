@@ -1,12 +1,16 @@
-import { PingRoomError } from './errors.js';
+import { PingRoomActivationIncompleteError, PingRoomError } from './errors.js';
 import { HttpClient } from './http.js';
-import { sleep } from './internal/async.js';
+import { combineSignals, sleep } from './internal/async.js';
 import { assertActionNumber, assertStructuredData, requireNonEmpty } from './internal/guards.js';
 import type { LiveStatusPing, LiveStatusResult, LiveStatusSnapshot } from './liveStatus.js';
 import { McpClient } from './mcp.js';
 import type {
   AcknowledgementWaitResult,
   AgentInboxEnsureResult,
+  AgentInboxActivateInput,
+  AgentInboxActivationQuestion,
+  AgentInboxActivationResult,
+  AgentInboxEnsureInput,
   AgentNotification,
   Approval,
   ApprovalInput,
@@ -56,10 +60,16 @@ import type {
 } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.pingroom.io';
-const DEFAULT_PAIRING_SCOPES = ['pingroom:rooms:read', 'pingroom:broadcast:send'] as const;
+const DEFAULT_PAIRING_SCOPES = [
+  'pingroom:rooms:read',
+  'pingroom:broadcast:send',
+  'pingroom:handoffs:create',
+] as const;
 /** Extra wall-clock allowance over the server's hold window for long-poll calls. */
 const LONG_POLL_BUFFER_MS = 10_000;
 const DEFAULT_WAIT_SECONDS = 20;
+const DEFAULT_INBOX_ACTIVATION_TIMEOUT_MS = 120_000;
+const MIN_INBOX_ACTIVATION_POLL_INTERVAL_MS = 2100;
 
 function envBaseUrl(): string | undefined {
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
@@ -88,6 +98,123 @@ function assertPing(ping: PingInput): void {
 
 function waitTimeoutMs(seconds: number | undefined): number {
   return (seconds ?? DEFAULT_WAIT_SECONDS) * 1000 + LONG_POLL_BUFFER_MS;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function invalidInboxResponse(message: string, body: Record<string, unknown> = {}): never {
+  throw new PingRoomError(message, { code: 'inbox_invalid_response', body });
+}
+
+function validateInboxEnsure(value: unknown): AgentInboxEnsureResult {
+  if (!isRecord(value) || value['onboarded'] !== true || typeof value['replayed'] !== 'boolean') {
+    return invalidInboxResponse('PingRoom returned an invalid Agent Inbox ensure response.');
+  }
+
+  const room = value['room'];
+  const question = value['question'];
+  if (
+    !isRecord(room)
+    || !isNonEmptyString(room['id'])
+    || typeof room['name'] !== 'string'
+    || !isNonEmptyString(room['invite_code'])
+    || typeof room['is_agent_inbox'] !== 'boolean'
+    || !isRecord(question)
+    || !isNonEmptyString(question['id'])
+    || question['kind'] !== 'question'
+    || !isNonEmptyString(question['prompt'])
+    || !Array.isArray(question['options'])
+    || question['options'].some((option) => (
+      !isRecord(option)
+      || !isNonEmptyString(option['value'])
+      || !isNonEmptyString(option['label'])
+    ))
+    || (question['state'] !== 'pending'
+      && question['state'] !== 'answered'
+      && question['state'] !== 'expired'
+      && question['state'] !== 'cancelled')
+    || !isNullableString(question['expires_at'])
+    || !isNullableString(question['created_at'])
+  ) {
+    return invalidInboxResponse('PingRoom returned an incomplete Agent Inbox ensure response.');
+  }
+
+  return value as unknown as AgentInboxEnsureResult;
+}
+
+function validateInboxWait(value: unknown, expectedId: string): Handoff {
+  if (!isRecord(value)) {
+    return invalidInboxResponse('PingRoom returned an invalid Agent Inbox wait response.');
+  }
+
+  const state = value['state'];
+  if (
+    !isNonEmptyString(value['id'])
+    || value['id'] !== expectedId
+    || value['kind'] !== 'question'
+    || (state !== 'pending' && state !== 'answered' && state !== 'expired' && state !== 'cancelled')
+    || (value['activation_completed'] !== undefined && typeof value['activation_completed'] !== 'boolean')
+    || (state !== 'answered' && value['activation_completed'] === true)
+  ) {
+    return invalidInboxResponse('PingRoom returned a mismatched Agent Inbox wait response.', {
+      expected_id: expectedId,
+      received_id: typeof value['id'] === 'string' ? value['id'] : null,
+      kind: typeof value['kind'] === 'string' ? value['kind'] : null,
+      state: typeof state === 'string' ? state : null,
+    });
+  }
+
+  if (state === 'answered') {
+    const answer = value['answer'];
+    if (
+      !isRecord(answer)
+      || !isNullableString(answer['value'])
+      || !isNullableString(answer['label'])
+      || !isNullableString(answer['text'])
+      || (!isNonEmptyString(answer['value']) && !isNonEmptyString(answer['text']))
+      || !isNullableString(answer['answered_at'])
+      || (answer['responder'] !== null && !isRecord(answer['responder']))
+    ) {
+      return invalidInboxResponse('PingRoom returned an answered activation without a valid answer.', {
+        id: expectedId,
+        state,
+      });
+    }
+
+    const responder = answer['responder'];
+    if (
+      isRecord(responder)
+      && (!isNullableString(responder['id']) || !isNullableString(responder['display_name']))
+    ) {
+      return invalidInboxResponse('PingRoom returned an invalid activation responder.', {
+        id: expectedId,
+        state,
+      });
+    }
+  } else if (value['answer'] !== undefined && value['answer'] !== null) {
+    return invalidInboxResponse('PingRoom returned an answer for an unresolved activation.', {
+      id: expectedId,
+      state,
+    });
+  }
+
+  return value as unknown as Handoff;
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw signal.reason ?? new Error('aborted');
+  }
 }
 
 // --- namespaces -----------------------------------------------------------
@@ -606,13 +733,114 @@ class HandoffsApi {
   }
 }
 
-/** One-call activation of the bound human's private Agent Inbox. */
+/** Setup and activation of the bound human's Agent Inbox delivery room. */
 class InboxApi {
   constructor(private readonly http: HttpClient) {}
 
-  /** Idempotently create/resolve the inbox and deliver its one-time test Question. */
-  ensure(): Promise<AgentInboxEnsureResult> {
-    return this.http.request('POST', '/api/agent/inbox/ensure', { body: {} });
+  /** Replay the viable activation attempt or create its next numbered retry. */
+  ensure(input: AgentInboxEnsureInput = {}): Promise<AgentInboxEnsureResult> {
+    return this.http.request('POST', '/api/agent/inbox/ensure', {
+      body: {},
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+  }
+
+  /**
+   * Ensure the bound human's Agent Inbox, then block on its onboarding
+   * Question until the server confirms activation, it expires/cancels, or the
+   * overall deadline elapses. Pairing remains a separate operation so adopting
+   * a credential never silently waits for a phone response.
+   */
+  async activate(input: AgentInboxActivateInput = {}): Promise<AgentInboxActivationResult> {
+    const overallTimeoutMs = input.overallTimeoutMs ?? DEFAULT_INBOX_ACTIVATION_TIMEOUT_MS;
+    if (!Number.isFinite(overallTimeoutMs) || overallTimeoutMs < 0) {
+      throw new PingRoomError('`overallTimeoutMs` must be a non-negative finite number.', {
+        code: 'invalid_request',
+      });
+    }
+
+    const deadlineError = (): PingRoomActivationIncompleteError => (
+      new PingRoomActivationIncompleteError(
+        'deadline_exceeded',
+        'Agent Inbox activation did not complete before the overall deadline.',
+        { overall_timeout_ms: overallTimeoutMs },
+      )
+    );
+    const deadlineController = new AbortController();
+    const deadlineTimer = overallTimeoutMs === 0
+      ? null
+      : setTimeout(() => deadlineController.abort(deadlineError()), overallTimeoutMs);
+    if (overallTimeoutMs === 0) deadlineController.abort(deadlineError());
+
+    const signal = input.signal
+      ? combineSignals(input.signal, deadlineController.signal)
+      : deadlineController.signal;
+
+    try {
+      throwIfAborted(signal);
+      const ensured = validateInboxEnsure(await this.ensure({ signal }));
+      const questionId = ensured.question.id;
+
+      for (;;) {
+        throwIfAborted(signal);
+        const pollStartedAt = Date.now();
+        const question = validateInboxWait(await this.http.request<unknown>(
+          'GET',
+          `/api/agent/handoffs/${enc(questionId)}/wait`,
+          {
+            query: dropUndefined({ timeout: input.timeout }),
+            timeoutMs: waitTimeoutMs(input.timeout),
+            signal,
+          },
+        ), questionId);
+        throwIfAborted(signal);
+
+        if (question.state === 'pending') {
+          await sleep(
+            Math.max(0, MIN_INBOX_ACTIVATION_POLL_INTERVAL_MS - (Date.now() - pollStartedAt)),
+            signal,
+          );
+          continue;
+        }
+
+        if (question.state === 'answered' && question.activation_completed === true) {
+          return {
+            ...ensured,
+            activation_completed: true,
+            question: question as AgentInboxActivationQuestion,
+          };
+        }
+
+        if (question.state === 'answered') {
+          throw new PingRoomActivationIncompleteError(
+            'answered_without_completion',
+            'The onboarding Question was answered without verified native phone receipt before the answer.',
+            { question_id: questionId, activation_completed: question.activation_completed ?? null },
+          );
+        }
+
+        if (question.state === 'expired' || question.state === 'cancelled') {
+          throw new PingRoomActivationIncompleteError(
+            question.state,
+            `The onboarding Question ${question.state} before Agent Inbox activation completed.`,
+            { question_id: questionId, activation_completed: question.activation_completed ?? null },
+          );
+        }
+
+        return invalidInboxResponse('PingRoom returned an invalid terminal activation state.', {
+          id: questionId,
+          state: question.state,
+        });
+      }
+    } catch (error) {
+      // A custom fetch implementation may reject with a generic AbortError
+      // instead of the signal's richer reason. Preserve caller cancellation
+      // and the activation-specific deadline error at this public boundary.
+      throwIfAborted(signal);
+      throw error;
+    } finally {
+      if (deadlineTimer !== null) clearTimeout(deadlineTimer);
+    }
   }
 }
 

@@ -15,8 +15,18 @@ export { PingRoom as PingRoomClient } from './client.js';
 export { McpClient } from './mcp.js';
 export type { JsonRpcError, McpInitializeResult, McpTool, McpToolResult } from './mcp.js';
 
-export { PingRoomError, PingRoomTimeoutError, PingRoomNetworkError } from './errors.js';
-export type { ApiErrorBody, HandoffErrorCode, PingRoomErrorInit } from './errors.js';
+export {
+  PingRoomError,
+  PingRoomTimeoutError,
+  PingRoomNetworkError,
+  PingRoomActivationIncompleteError,
+} from './errors.js';
+export type {
+  AgentInboxActivationIncompleteReason,
+  ApiErrorBody,
+  HandoffErrorCode,
+  PingRoomErrorInit,
+} from './errors.js';
 
 export {
   verifyWebhookSignature,

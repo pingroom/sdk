@@ -88,7 +88,7 @@ export interface ClaimCompleteParams {
 
 /** Start an app-approved pairing without copying an API token or room code. */
 export interface StartPairingParams {
-  /** Defaults to room lookup and broadcast, both shown on the approval screen. */
+  /** Defaults to room lookup, broadcast, and private Handoff/Inbox activation. */
   scopes?: ScopeInput[];
   agent_label?: string;
 }
@@ -569,6 +569,11 @@ export interface Handoff {
   options?: HandoffOption[];
   /** question handoff: the resolution (once `state === 'answered'`). */
   answer?: HandoffAnswer | null;
+  /**
+   * Question handoffs used for Agent Inbox onboarding expose whether the
+   * server recorded the exact delivery + answer + agent-observation event.
+   */
+  activation_completed?: boolean;
   [key: string]: unknown;
 }
 
@@ -620,7 +625,7 @@ export interface AgentInboxEnsureResult {
     id: string;
     name: string;
     invite_code: string;
-    is_agent_inbox: true;
+    is_agent_inbox: boolean;
   };
   question: {
     id: string;
@@ -632,6 +637,40 @@ export interface AgentInboxEnsureResult {
     created_at: string | null;
   };
 }
+
+/** Cancellation for the idempotent Agent Inbox ensure request. */
+export interface AgentInboxEnsureInput {
+  signal?: AbortSignal;
+}
+
+/**
+ * Controls the activation handoff wait. `timeout` is the duration of each
+ * bounded server hold; a still-pending response is polled again until the
+ * server confirms activation, the Question expires/cancels, the overall
+ * deadline elapses, or `signal` is aborted.
+ */
+export interface AgentInboxActivateInput extends WaitHandoffInput {
+  /**
+   * Wall-clock limit for ensure + every pending long-poll combined. Defaults
+   * to 120000 (two minutes). Distinct from `timeout`, which controls one hold.
+   */
+  overallTimeoutMs?: number;
+}
+
+/** The terminal question returned by a completed Agent Inbox activation. */
+export type AgentInboxActivationQuestion =
+  Handoff & {
+    kind: 'question';
+    state: 'answered';
+    answer: HandoffAnswer;
+    activation_completed: true;
+  };
+
+/** `ensure` metadata plus the terminal, fully resolved onboarding handoff. */
+export type AgentInboxActivationResult = Omit<AgentInboxEnsureResult, 'question'> & {
+  activation_completed: true;
+  question: AgentInboxActivationQuestion;
+};
 
 // --- profile --------------------------------------------------------------
 
