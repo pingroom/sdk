@@ -29,6 +29,7 @@ export type AgentScope =
   | 'pingroom:approvals:request'
   | 'pingroom:questions:ask'
   | 'pingroom:handoffs:create'
+  | 'pingroom:live:write'
   | 'pingroom:profile:write';
 
 /** A known scope, or any forward-compatible string (keeps autocomplete on the knowns). */
@@ -67,10 +68,12 @@ export interface RegisterParams {
 export interface Credential {
   credential: string;
   credential_type: 'pre_claim' | 'active';
-  expires_in: number;
+  expires_in: number | null;
   scopes: string[];
   handle?: string;
   claim?: { start_uri: string; complete_uri: string };
+  account?: { name?: string | null } | null;
+  room?: { invite_code: string; name?: string | null } | null;
 }
 
 export interface ClaimStartParams {
@@ -81,6 +84,38 @@ export interface ClaimCompleteParams {
   email: string;
   otp: string;
   scopes?: ScopeInput[];
+}
+
+/** Start an app-approved pairing without copying an API token or room code. */
+export interface StartPairingParams {
+  /** Defaults to room lookup and broadcast, both shown on the approval screen. */
+  scopes?: ScopeInput[];
+  agent_label?: string;
+}
+
+/** Short-lived app link returned when a pairing session starts. */
+export interface PairingStart {
+  pair_token: string;
+  pair_url: string;
+  expires_in: number;
+  poll_interval_ms: number;
+}
+
+export interface PairedCredential extends Credential {
+  credential_type: 'active';
+  room: { invite_code: string; name?: string | null };
+}
+
+export type PairingStatus =
+  | { status: 'pending' }
+  | { status: 'expired' }
+  | (PairedCredential & { status: 'active' });
+
+export interface WaitForPairingOptions {
+  /** Stop waiting without consuming the pairing session. */
+  signal?: AbortSignal;
+  /** Override the server-suggested polling interval (clamped to 1–10 seconds). */
+  pollIntervalMs?: number;
 }
 
 // --- rooms & quick actions ------------------------------------------------
@@ -152,7 +187,7 @@ export interface Room {
 
 // --- pings / notifications ------------------------------------------------
 
-/** The body of a ping — used for broadcasts and agent-to-agent direct pings. */
+/** The body of a ping — used for broadcasts and the retired direct-ping compatibility method. */
 export interface PingInput {
   message: string;
   action_number?: number;

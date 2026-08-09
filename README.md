@@ -55,7 +55,30 @@ await pr.broadcast('ab12cd', {
 
 ## Authentication
 
-Bring an existing agent token, or run the auth.md flow:
+For local tools, pair through the PingRoom app. No copied token or room code:
+
+```ts
+const pr = new PingRoom();
+
+const pairing = await pr.auth.startPairing({
+  agent_label: 'Deploy bot',
+  scopes: ['pingroom:rooms:read', 'pingroom:broadcast:send'],
+});
+
+console.log(`Open in PingRoom: ${pairing.pair_url}`);
+const active = await pr.auth.waitForPairing(pairing);
+
+// The approver chose this room, and the client now uses the active credential.
+await pr.broadcast(active.room.invite_code, { message: 'SDK connected ✅' });
+```
+
+`waitForPairing()` tolerates short network outages and stops when the app link
+expires. Pass an `AbortSignal` when your process needs its own cancellation.
+If `scopes` is omitted, pairing requests room lookup and broadcast access; the
+approval screen still shows both grants before the user connects.
+
+If you already manage credentials, bring an existing agent token or run the
+lower-level auth.md email flow:
 
 ```ts
 const pr = new PingRoom();
@@ -394,12 +417,18 @@ app.post('/pingroom', async (req, res) => {
 
 ## MCP
 
-Drive the MCP endpoint directly (tools are scope-filtered server-side):
+Drive the MCP endpoint directly with a credential you already hold. The helper
+performs the initialize handshake automatically, and tools are scope-filtered
+server-side:
 
 ```ts
 const { tools } = await pr.mcp.listTools();
-const result = await pr.mcp.callTool('broadcast', { room: 'ab12cd', message: 'hi' });
+const result = await pr.mcp.callTool('broadcast', { invite_code: 'ab12cd', message: 'hi' });
 ```
+
+`pr.mcp` is a PingRoom-specific JSON-RPC convenience client, not a general MCP
+host. Cursor, Claude, and other MCP hosts should connect to the hosted endpoint
+directly and use OAuth instead: <https://pingroom.io/connect-mcp.md>.
 
 ## Agent directory (public)
 

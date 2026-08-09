@@ -37,9 +37,13 @@ import type {
   QuestionInput,
   QuickAction,
   RegisterParams,
+  PairingStart,
+  PairingStatus,
+  PairedCredential,
   Room,
   RequestAckInput,
   RotateHandleResult,
+  StartPairingParams,
   TriggerInput,
   UpdateQuickActionInput,
   WaitApprovalInput,
@@ -48,9 +52,11 @@ import type {
   WaitInput,
   WaitQuestionInput,
   WaitResult,
+  WaitForPairingOptions,
 } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.pingroom.io';
+const DEFAULT_PAIRING_SCOPES = ['pingroom:rooms:read', 'pingroom:broadcast:send'] as const;
 /** Extra wall-clock allowance over the server's hold window for long-poll calls. */
 const LONG_POLL_BUFFER_MS = 10_000;
 const DEFAULT_WAIT_SECONDS = 20;
@@ -107,6 +113,122 @@ class AuthApi {
     requireNonEmpty(params.email, 'email');
     requireNonEmpty(params.otp, 'otp');
     return this.http.request('POST', '/api/agent/auth/claim/complete', { body: dropUndefined({ ...params }) });
+  }
+
+  /**
+   * Register a pending agent and create a short-lived link that opens the
+   * PingRoom app. The person approving it chooses the delivery room and sees
+   * the exact requested scopes. The pending credential stays private inside
+   * this client and is replaced automatically once waitForPairing() succeeds.
+   */
+  async startPairing(params: StartPairingParams = {}): Promise<PairingStart> {
+    const scopes = params.scopes ?? [...DEFAULT_PAIRING_SCOPES];
+    const previousToken = this.http.getToken();
+    const pending = await this.register({
+      type: 'anonymous',
+      scopes,
+      ...(params.agent_label ? { agent_label: params.agent_label } : {}),
+    });
+    this.http.setToken(pending.credential);
+
+    try {
+      return await this.http.request('POST', '/api/agent/auth/pair/start', {
+        body: { scopes },
+      });
+    } catch (error) {
+      if (this.http.getToken() === pending.credential) {
+        this.http.setToken(previousToken);
+      }
+      throw error;
+    }
+  }
+
+  /** Read the current state of an app pairing using the pending credential. */
+  pairingStatus(options: Pick<WaitForPairingOptions, 'signal'> = {}): Promise<PairingStatus> {
+    return this.http.request('GET', '/api/agent/auth/pair/status', { signal: options.signal });
+  }
+
+  /**
+   * Wait until the person approves in PingRoom, or the short-lived link
+   * expires. Transient network, 429, and 5xx failures are retried inside the
+   * server-provided lifetime. On success the client immediately starts using
+   * the active credential returned by the server.
+   */
+  async waitForPairing(
+    pairing: PairingStart,
+    options: WaitForPairingOptions = {},
+  ): Promise<PairedCredential> {
+    const lifetimeMs = Math.max(1, Number(pairing.expires_in) || 900) * 1000;
+    const requestedInterval = options.pollIntervalMs ?? pairing.poll_interval_ms;
+    const intervalMs = Math.min(Math.max(Number(requestedInterval) || 1500, 1000), 10_000);
+    const deadline = Date.now() + lifetimeMs;
+    let transientFailures = 0;
+
+    while (Date.now() < deadline) {
+      this.throwIfPairingAborted(options.signal);
+
+      try {
+        const status = await this.pairingStatus({ signal: options.signal });
+        this.throwIfPairingAborted(options.signal);
+        transientFailures = 0;
+
+        if (status.status === 'active') {
+          if (
+            typeof status.credential !== 'string'
+            || status.credential.trim() === ''
+            || status.credential_type !== 'active'
+            || !Array.isArray(status.scopes)
+            || status.scopes.some((scope) => typeof scope !== 'string' || scope.trim() === '')
+            || (status.expires_in !== null
+              && (typeof status.expires_in !== 'number'
+                || !Number.isFinite(status.expires_in)
+                || status.expires_in < 0))
+            || !status.room
+            || typeof status.room.invite_code !== 'string'
+            || status.room.invite_code.trim() === ''
+          ) {
+            throw new PingRoomError('PingRoom returned an incomplete approved pairing.', {
+              code: 'pairing_invalid_response',
+              body: { status: status.status },
+            });
+          }
+          this.http.setToken(status.credential);
+          const { status: _status, ...credential } = status;
+          return credential;
+        }
+        if (status.status === 'expired') {
+          throw new PingRoomError('The PingRoom pairing link expired before it was approved.', {
+            code: 'pairing_expired',
+          });
+        }
+      } catch (error) {
+        if (
+          error instanceof PingRoomError
+          && (error.code === 'network_error'
+            || error.code === 'timeout'
+            || error.status === 429
+            || error.status >= 500)
+        ) {
+          transientFailures += 1;
+          const backoffMs = Math.min(intervalMs * 2 ** Math.max(0, transientFailures - 3), 30_000);
+          await sleep(Math.max(0, Math.min(backoffMs, deadline - Date.now())), options.signal);
+          continue;
+        }
+        throw error;
+      }
+
+      await sleep(Math.max(0, Math.min(intervalMs, deadline - Date.now())), options.signal);
+    }
+
+    throw new PingRoomError('The PingRoom pairing link expired before it was approved.', {
+      code: 'pairing_expired',
+    });
+  }
+
+  private throwIfPairingAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error('aborted');
+    }
   }
 
   /** Rotate to a fresh credential (same scopes/handle). */

@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PingRoom, PingRoomError } from '../dist/index.js';
+import { PingRoom, PingRoomError, PingRoomTimeoutError } from '../dist/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 test('package and lockfile versions stay aligned', () => {
   const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
   const lock = JSON.parse(readFileSync(join(__dirname, '..', 'package-lock.json'), 'utf8'));
-  assert.equal(pkg.version, '0.3.1');
+  assert.equal(pkg.version, '0.4.0');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
 });
@@ -262,6 +262,290 @@ test('setToken updates the bearer used on subsequent calls', async () => {
   assert.equal(calls[0].init.headers['Authorization'], 'Bearer tok2');
 });
 
+test('auth.startPairing registers anonymously, then creates an app pairing with the pending credential', async () => {
+  const scopes = ['pingroom:rooms:read', 'pingroom:broadcast:send'];
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/auth': () => ({
+      status: 201,
+      body: {
+        credential: 'pending_token',
+        credential_type: 'preclaim',
+        expires_in: 900,
+        scopes,
+      },
+    }),
+    'POST /api/agent/auth/pair/start': () => ({
+      status: 201,
+      body: {
+        pair_token: 'pair_123',
+        pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+        expires_in: 900,
+        poll_interval_ms: 1500,
+      },
+    }),
+  });
+  const pr = new PingRoom({ fetch: fetchMock });
+
+  const pairing = await pr.auth.startPairing({ agent_label: 'Deploy bot', scopes });
+
+  assert.equal(pairing.pair_token, 'pair_123');
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    type: 'anonymous',
+    scopes,
+    agent_label: 'Deploy bot',
+  });
+  assert.equal(calls[0].init.headers['Authorization'], undefined);
+  assert.deepEqual(JSON.parse(calls[1].init.body), { scopes });
+  assert.equal(calls[1].init.headers['Authorization'], 'Bearer pending_token');
+});
+
+test('auth.startPairing restores an existing credential when pair creation fails', async () => {
+  const { fetchMock } = recorder({
+    'POST /api/agent/auth': () => ({
+      status: 201,
+      body: {
+        credential: 'pending_token',
+        credential_type: 'pre_claim',
+        expires_in: 900,
+        scopes: ['pingroom:rooms:read'],
+      },
+    }),
+    'POST /api/agent/auth/pair/start': () => ({
+      status: 503,
+      body: { code: 'temporarily_unavailable', message: 'Try again.' },
+    }),
+  });
+  const pr = new PingRoom({ token: 'existing_active', fetch: fetchMock });
+
+  await assert.rejects(
+    () => pr.auth.startPairing({ scopes: ['pingroom:rooms:read'] }),
+    (e) => e instanceof PingRoomError && e.status === 503,
+  );
+  assert.equal(pr.getToken(), 'existing_active');
+});
+
+test('auth.startPairing defaults to the useful room-read and broadcast scopes', async () => {
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/auth': () => ({
+      status: 201,
+      body: {
+        credential: 'pending_token',
+        credential_type: 'pre_claim',
+        expires_in: 900,
+        scopes: [],
+      },
+    }),
+    'POST /api/agent/auth/pair/start': () => ({
+      status: 201,
+      body: {
+        pair_token: 'pair_123',
+        pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+        expires_in: 900,
+        poll_interval_ms: 1500,
+      },
+    }),
+  });
+  const pr = new PingRoom({ fetch: fetchMock });
+
+  await pr.auth.startPairing();
+
+  const expected = ['pingroom:rooms:read', 'pingroom:broadcast:send'];
+  assert.deepEqual(JSON.parse(calls[0].init.body).scopes, expected);
+  assert.deepEqual(JSON.parse(calls[1].init.body).scopes, expected);
+});
+
+test('auth.waitForPairing adopts the approved credential and selected room', async () => {
+  let statusCalls = 0;
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/auth': () => ({
+      status: 201,
+      body: {
+        credential: 'pending_token',
+        credential_type: 'preclaim',
+        expires_in: 900,
+        scopes: ['pingroom:rooms:read'],
+      },
+    }),
+    'POST /api/agent/auth/pair/start': () => ({
+      status: 201,
+      body: {
+        pair_token: 'pair_123',
+        pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+        expires_in: 10,
+        poll_interval_ms: 1000,
+      },
+    }),
+    'GET /api/agent/auth/pair/status': () => {
+      statusCalls += 1;
+      if (statusCalls === 1) return { body: { status: 'pending' } };
+      return {
+        body: {
+          status: 'active',
+          credential: 'active_token',
+          credential_type: 'active',
+          expires_in: 0,
+          scopes: ['pingroom:rooms:read'],
+          handle: 'agt_deploy',
+          room: { invite_code: 'AB12CD', name: 'Deployments' },
+        },
+      };
+    },
+    'GET /api/agent/rooms': () => ({ body: [] }),
+  });
+  const pr = new PingRoom({ fetch: fetchMock });
+  const pairing = await pr.auth.startPairing({ scopes: ['pingroom:rooms:read'] });
+
+  const active = await pr.auth.waitForPairing(pairing);
+  await pr.rooms.list();
+
+  assert.equal(active.credential, 'active_token');
+  assert.equal(active.room.invite_code, 'AB12CD');
+  assert.equal(pr.getToken(), 'active_token');
+  assert.equal(calls.at(-1).init.headers['Authorization'], 'Bearer active_token');
+});
+
+test('auth.waitForPairing reports an expired app link without changing the token', async () => {
+  const { fetchMock } = recorder({
+    'GET /api/agent/auth/pair/status': () => ({ body: { status: 'expired' } }),
+  });
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+  await assert.rejects(
+    () => pr.auth.waitForPairing({
+      pair_token: 'pair_123',
+      pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+      expires_in: 10,
+      poll_interval_ms: 1000,
+    }),
+    (e) => e instanceof PingRoomError && e.code === 'pairing_expired',
+  );
+  assert.equal(pr.getToken(), 'pending_token');
+});
+
+test('auth.waitForPairing rejects an incomplete active response without adopting it', async () => {
+  const { fetchMock } = recorder({
+    'GET /api/agent/auth/pair/status': () => ({
+      body: {
+        status: 'active',
+        credential: '',
+        credential_type: 'active',
+        expires_in: null,
+        scopes: ['pingroom:rooms:read'],
+        room: null,
+      },
+    }),
+  });
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+  await assert.rejects(
+    () => pr.auth.waitForPairing({
+      pair_token: 'pair_123',
+      pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+      expires_in: 10,
+      poll_interval_ms: 1000,
+    }),
+    (e) => e instanceof PingRoomError && e.code === 'pairing_invalid_response',
+  );
+  assert.equal(pr.getToken(), 'pending_token');
+});
+
+test('auth.waitForPairing rejects invalid active credential metadata', async () => {
+  const { fetchMock } = recorder({
+    'GET /api/agent/auth/pair/status': () => ({
+      body: {
+        status: 'active',
+        credential: 'preclaim_token',
+        credential_type: 'pre_claim',
+        expires_in: 'never',
+        scopes: 'pingroom:rooms:read',
+        room: { invite_code: 'AB12CD', name: 'Deployments' },
+      },
+    }),
+  });
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+  await assert.rejects(
+    () => pr.auth.waitForPairing({
+      pair_token: 'pair_123',
+      pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+      expires_in: 10,
+      poll_interval_ms: 1000,
+    }),
+    (e) => e instanceof PingRoomError && e.code === 'pairing_invalid_response',
+  );
+  assert.equal(pr.getToken(), 'pending_token');
+});
+
+test('auth.waitForPairing does not adopt a credential after cancellation during a status poll', async () => {
+  let releaseStatus;
+  const statusGate = new Promise((resolve) => {
+    releaseStatus = resolve;
+  });
+  const fetchMock = async (url) => {
+    if (new URL(url).pathname !== '/api/agent/auth/pair/status') {
+      return new Response('{}', { status: 404 });
+    }
+    await statusGate;
+    return new Response(JSON.stringify({
+      status: 'active',
+      credential: 'active_token',
+      credential_type: 'active',
+      expires_in: null,
+      scopes: ['pingroom:rooms:read'],
+      room: { invite_code: 'AB12CD', name: 'Deployments' },
+    }));
+  };
+  const controller = new AbortController();
+  const cancelled = new Error('pairing cancelled');
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+  const waiting = pr.auth.waitForPairing({
+    pair_token: 'pair_123',
+    pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+    expires_in: 10,
+    poll_interval_ms: 1000,
+  }, { signal: controller.signal });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort(cancelled);
+  releaseStatus();
+
+  await assert.rejects(waiting, (e) => e === cancelled);
+  assert.equal(pr.getToken(), 'pending_token');
+});
+
+test('auth.waitForPairing retries a timed-out status poll', async () => {
+  let statusCalls = 0;
+  const fetchMock = async (url) => {
+    if (new URL(url).pathname !== '/api/agent/auth/pair/status') {
+      return new Response('{}', { status: 404 });
+    }
+    statusCalls += 1;
+    if (statusCalls === 1) {
+      throw new PingRoomTimeoutError();
+    }
+    return new Response(JSON.stringify({
+      status: 'active',
+      credential: 'active_token',
+      credential_type: 'active',
+      expires_in: null,
+      scopes: ['pingroom:rooms:read'],
+      room: { invite_code: 'AB12CD', name: 'Deployments' },
+    }));
+  };
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+  const active = await pr.auth.waitForPairing({
+    pair_token: 'pair_123',
+    pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+    expires_in: 3,
+    poll_interval_ms: 1000,
+  });
+
+  assert.equal(statusCalls, 2);
+  assert.equal(active.credential, 'active_token');
+  assert.equal(pr.getToken(), 'active_token');
+});
+
 test('a call needing auth without a token throws no_token before fetching', async () => {
   let fetched = false;
   const pr = new PingRoom({ fetch: async () => ((fetched = true), new Response('{}')) });
@@ -482,15 +766,53 @@ test('handoffs surfaces a 409 idempotency_conflict as a typed PingRoomError', as
   );
 });
 
-test('mcp.callTool builds a JSON-RPC 2.0 envelope', async () => {
+test('mcp.callTool initializes once, notifies the server, and sends the negotiated protocol header', async () => {
   const { calls, fetchMock } = recorder({
-    'POST /api/agent/mcp': () => ({ body: { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: '{}' }] } } }),
+    'POST /api/agent/mcp': ({ init }) => {
+      const body = JSON.parse(init.body);
+      if (body.method === 'initialize') {
+        return {
+          body: {
+            jsonrpc: '2.0',
+            id: body.id,
+            result: {
+              protocolVersion: '2025-06-18',
+              capabilities: { tools: {} },
+              serverInfo: { name: 'pingroom', version: '1.0.0' },
+            },
+          },
+        };
+      }
+      if (body.method === 'notifications/initialized') {
+        return { status: 202 };
+      }
+      if (body.method === 'tools/list') {
+        return { body: { jsonrpc: '2.0', id: body.id, result: { tools: [] } } };
+      }
+      return {
+        body: {
+          jsonrpc: '2.0',
+          id: body.id,
+          result: { content: [{ type: 'text', text: '{}' }] },
+        },
+      };
+    },
   });
   const pr = new PingRoom({ token: 't', fetch: fetchMock });
   const r = await pr.mcp.callTool('list_rooms', { limit: 5 });
+  await pr.mcp.listTools();
+
   assert.equal(r.content[0].type, 'text');
-  const body = JSON.parse(calls[0].init.body);
-  assert.equal(body.jsonrpc, '2.0');
-  assert.equal(body.method, 'tools/call');
-  assert.deepEqual(body.params, { name: 'list_rooms', arguments: { limit: 5 } });
+  assert.deepEqual(calls.map(({ init }) => JSON.parse(init.body).method), [
+    'initialize',
+    'notifications/initialized',
+    'tools/call',
+    'tools/list',
+  ]);
+  const toolCall = JSON.parse(calls[2].init.body);
+  assert.equal(toolCall.jsonrpc, '2.0');
+  assert.deepEqual(toolCall.params, { name: 'list_rooms', arguments: { limit: 5 } });
+  assert.equal(calls[0].init.headers['MCP-Protocol-Version'], undefined);
+  assert.equal(calls[1].init.headers['MCP-Protocol-Version'], '2025-06-18');
+  assert.equal(calls[2].init.headers['MCP-Protocol-Version'], '2025-06-18');
 });
