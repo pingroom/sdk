@@ -118,6 +118,40 @@ await pr.actions.update('ab12cd', 1, { label: 'Approve', icon: 'check' });
 await pr.actions.trigger('ab12cd', 1);
 ```
 
+## Attachments
+
+Send the file itself, not a link to it. Upload first, then pass the ids to any
+send. Bytes never travel over MCP or a JSON ping body, and the returned metadata
+never carries a permanent URL — recipients read the content back through an
+authenticated endpoint.
+
+```ts
+const report = await pr.attachments.upload({
+  content: await readFile('report.pdf'),
+  filename: 'report.pdf',
+});
+
+await pr.broadcast('ab12cd', {
+  message: 'Nightly report',
+  attachment_ids: [report.id],
+});
+
+// Read one back (raw Response — stream it, or .arrayBuffer() / .text() it)
+const res = await pr.attachments.content(report.id);
+```
+
+`content` accepts a `Blob`/`File`, a `Uint8Array`, or a UTF-8 string. Accepted
+types are `md`, `pdf`, `html`, `txt`, `jpg`, `jpeg`, `png`, up to 20 MiB each
+and 10 per ping; `questions.ask()` takes `attachment_ids` too.
+
+Ids are single-use: the send claims them, and a claimed or expired id fails the
+whole ping. An upload you never attach expires by itself after 24 hours, or you
+can `pr.attachments.delete(id)` it.
+
+Uploading needs the `pingroom:attachments:write` scope **and** a Pro account —
+otherwise the API answers `402 pro_required`. Reading and deleting are not gated,
+so a lapsed subscription never locks you out of files you already sent.
+
 ## Listening for pings (real time)
 
 `listen()` is an async iterator that long-polls and advances the cursor for you — no poll-spam, no missed or duplicated pings. Stop it with an `AbortSignal`.

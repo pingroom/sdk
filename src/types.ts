@@ -21,6 +21,7 @@ export type AgentScope =
   | 'pingroom:actions:write'
   | 'pingroom:actions:trigger'
   | 'pingroom:broadcast:send'
+  | 'pingroom:attachments:write'
   | 'pingroom:notifications:read'
   | 'pingroom:webhooks:read'
   | 'pingroom:webhooks:write'
@@ -200,10 +201,42 @@ export interface PingInput {
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
+  /**
+   * Ordered ids from `attachments.upload()` (max 10). Ids are single-use: the
+   * send claims them, and an already-claimed or expired id fails the whole
+   * ping. File bytes never ride this JSON body.
+   */
+  attachment_ids?: string[];
   /** Open the acknowledgement lifecycle for this ping. First acknowledgement wins. */
   requires_ack?: boolean;
   /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. */
   ack_timeout_seconds?: number | null;
+}
+
+/**
+ * Safe attachment metadata. Storage keys, checksums, owner ids, and permanent
+ * URLs are deliberately not part of this contract — read the bytes through
+ * `attachments.content()` with the credential that can see the ping.
+ */
+export interface Attachment {
+  id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: string;
+}
+
+/** The file types the attachment endpoint accepts. */
+export type AttachmentExtension = 'md' | 'pdf' | 'html' | 'txt' | 'jpg' | 'jpeg' | 'png';
+
+export interface UploadAttachmentInput {
+  /** File bytes. A Blob/File, a Uint8Array, or a UTF-8 string. */
+  content: Blob | Uint8Array | string;
+  /** Display filename. Its extension must be one of AttachmentExtension. */
+  filename: string;
+  /** Overrides the type sent in the multipart part. Usually inferred is fine. */
+  contentType?: string;
+  signal?: AbortSignal;
 }
 
 export interface TriggerInput {
@@ -234,6 +267,7 @@ export interface PingResult {
   data?: JsonObject | null;
   correlation_id?: string | null;
   reply_to?: string | null;
+  attachments?: Attachment[];
   action_state?: ActionState | null;
   created_at: string;
   recipient_count?: number;
@@ -262,6 +296,7 @@ export interface AgentNotification {
   data?: JsonObject | null;
   correlation_id?: string | null;
   reply_to?: string | null;
+  attachments?: Attachment[];
   action_state?: ActionState | null;
   created_at: string;
   room?: { code: string; name: string; icon: string | null; color: string | null };
@@ -408,6 +443,8 @@ export interface QuestionInput {
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
+  /** Ordered ids from `attachments.upload()` (max 10). Same single-use rules as PingInput. */
+  attachment_ids?: string[];
 }
 
 /** A resolved option on the Question wire shape. */

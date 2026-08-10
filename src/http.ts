@@ -65,6 +65,29 @@ export class HttpClient {
   }
 
   async request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
+    return this.parse<T>(await this.send(method, path, opts));
+  }
+
+  /**
+   * The undecoded Response, for endpoints that return bytes rather than JSON.
+   * Non-2xx still raises a PingRoomError so callers never read an error body
+   * as if it were content.
+   */
+  async raw(method: string, path: string, opts: RequestOptions = {}): Promise<Response> {
+    const res = await this.send(method, path, {
+      ...opts,
+      headers: { Accept: '*/*', ...opts.headers },
+    });
+
+    if (!res.ok) {
+      // Route the failure through the shared JSON error mapping.
+      await this.parse<unknown>(res);
+    }
+
+    return res;
+  }
+
+  private async send(method: string, path: string, opts: RequestOptions = {}): Promise<Response> {
     const url = this.buildUrl(path, opts.query);
 
     const headers: Record<string, string> = {
@@ -83,10 +106,14 @@ export class HttpClient {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    let bodyText: string | undefined;
-    if (opts.body !== undefined) {
+    // FormData is passed through untouched: the runtime has to generate the
+    // multipart boundary itself, so setting Content-Type here would corrupt it.
+    let payload: string | FormData | undefined;
+    if (opts.body instanceof FormData) {
+      payload = opts.body;
+    } else if (opts.body !== undefined) {
       headers['Content-Type'] = 'application/json';
-      bodyText = JSON.stringify(opts.body);
+      payload = JSON.stringify(opts.body);
     }
 
     const timeoutMs = opts.timeoutMs ?? this.timeoutMs;
@@ -96,7 +123,7 @@ export class HttpClient {
 
     let res: Response;
     try {
-      res = await this.fetchImpl(url, { method, headers, body: bodyText, signal });
+      res = await this.fetchImpl(url, { method, headers, body: payload, signal });
     } catch (err) {
       // Our own timeout reason propagates as the rejection.
       if (err instanceof PingRoomError) {
@@ -110,7 +137,7 @@ export class HttpClient {
       clearTimeout(timer);
     }
 
-    return this.parse<T>(res);
+    return res;
   }
 
   private async parse<T>(res: Response): Promise<T> {

@@ -6,6 +6,7 @@ import type { LiveStatusPing, LiveStatusResult, LiveStatusSnapshot } from './liv
 import { McpClient } from './mcp.js';
 import type {
   AcknowledgementWaitResult,
+  Attachment,
   AgentInboxEnsureResult,
   AgentInboxActivateInput,
   AgentInboxActivationQuestion,
@@ -50,6 +51,7 @@ import type {
   StartPairingParams,
   TriggerInput,
   UpdateQuickActionInput,
+  UploadAttachmentInput,
   WaitApprovalInput,
   WaitHandoffInput,
   WaitForAcknowledgementInput,
@@ -900,6 +902,68 @@ class LiveApi {
   }
 }
 
+/**
+ * Private files that a ping can carry.
+ *
+ * Upload first, then pass the returned ids to `broadcast()` / `questions.ask()`
+ * as `attachment_ids`. Bytes never travel over MCP or a JSON ping body. An
+ * upload that is never attached expires on its own after 24 hours.
+ *
+ * Uploading requires the bound account to hold Pro (the API answers 402
+ * `pro_required` otherwise). Reading and deleting are not gated.
+ */
+class AttachmentsApi {
+  constructor(private readonly http: HttpClient) {}
+
+  /** Upload one file and get back the id a send can claim. */
+  upload(input: UploadAttachmentInput): Promise<Attachment> {
+    requireNonEmpty(input.filename, 'filename');
+
+    const body = new FormData();
+    body.append('file', toAttachmentBlob(input), input.filename);
+
+    return this.http
+      .request<{ attachment: Attachment }>('POST', '/api/agent/attachments', {
+        body,
+        ...(input.signal ? { signal: input.signal } : {}),
+      })
+      .then((res) => res.attachment);
+  }
+
+  /**
+   * Raw bytes for an attachment this credential is allowed to see. Returns the
+   * undecoded Response so a caller can stream it, or read text/arrayBuffer.
+   */
+  content(attachmentId: string, signal?: AbortSignal): Promise<Response> {
+    requireNonEmpty(attachmentId, 'attachmentId');
+    return this.http.raw('GET', `/api/agent/attachments/${enc(attachmentId)}/content`, {
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  /** Discard an upload that has not been attached to a ping yet. */
+  delete(attachmentId: string): Promise<void> {
+    requireNonEmpty(attachmentId, 'attachmentId');
+    return this.http.request('DELETE', `/api/agent/attachments/${enc(attachmentId)}`);
+  }
+}
+
+/** Normalise the three accepted content shapes into one multipart part. */
+function toAttachmentBlob(input: UploadAttachmentInput): Blob {
+  const type = input.contentType ?? '';
+  if (input.content instanceof Blob) {
+    return type ? new Blob([input.content], { type }) : input.content;
+  }
+  // Copy into a plain ArrayBuffer: a Uint8Array view may be a window onto a
+  // larger (or SharedArrayBuffer-backed) buffer, which Blob would not accept.
+  const parts: BlobPart[] =
+    typeof input.content === 'string'
+      ? [input.content]
+      : [new Uint8Array(input.content).slice().buffer as ArrayBuffer];
+
+  return new Blob(parts, type ? { type } : undefined);
+}
+
 /** Public, unauthenticated agent directory. */
 class DirectoryApi {
   constructor(private readonly http: HttpClient) {}
@@ -923,6 +987,7 @@ export class PingRoom {
   readonly rooms: RoomsApi;
   readonly actions: ActionsApi;
   readonly notifications: NotificationsApi;
+  readonly attachments: AttachmentsApi;
   readonly agents: AgentsApi;
   readonly approvals: ApprovalsApi;
   readonly questions: QuestionsApi;
@@ -950,6 +1015,7 @@ export class PingRoom {
     this.rooms = new RoomsApi(this.http);
     this.actions = new ActionsApi(this.http);
     this.notifications = new NotificationsApi(this.http);
+    this.attachments = new AttachmentsApi(this.http);
     this.agents = new AgentsApi(this.http);
     this.approvals = new ApprovalsApi(this.http);
     this.questions = new QuestionsApi(this.http);
