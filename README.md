@@ -141,11 +141,12 @@ const res = await pr.attachments.content(report.id);
 ```
 
 `content` accepts a `Blob`/`File`, a `Uint8Array`, or a UTF-8 string. Accepted
-types are `md`, `pdf`, `html`, `txt`, `jpg`, `jpeg`, `png`, up to 20 MiB each
-and 10 per ping; `questions.ask()` takes `attachment_ids` too.
+types are `md`, `pdf`, `html`, `txt`, `jpg`, `jpeg`, `png`, from 1 byte through
+5 MiB each. A Ping or Question accepts at most 4; `questions.ask()` takes
+`attachment_ids` too.
 
 Ids are single-use: the send claims them, and a claimed or expired id fails the
-whole ping. An upload you never attach expires by itself after 24 hours, or you
+whole send. An upload you never attach expires by itself after 24 hours, or you
 can `pr.attachments.delete(id)` it.
 
 Uploading needs the `pingroom:attachments:write` scope **and** a Pro account —

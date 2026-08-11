@@ -903,11 +903,13 @@ class LiveApi {
 }
 
 /**
- * Private files that a ping can carry.
+ * Private files that a Ping or Question can carry.
  *
  * Upload first, then pass the returned ids to `broadcast()` / `questions.ask()`
  * as `attachment_ids`. Bytes never travel over MCP or a JSON ping body. An
  * upload that is never attached expires on its own after 24 hours.
+ * Each file must be 1 byte–5 MiB with an md/pdf/html/txt/jpg/jpeg/png filename;
+ * a Ping or Question accepts at most four ids.
  *
  * Uploading requires the bound account to hold Pro (the API answers 402
  * `pro_required` otherwise). Reading and deleting are not gated.

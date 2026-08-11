@@ -202,7 +202,7 @@ export interface PingInput {
   correlation_id?: string;
   reply_to?: string;
   /**
-   * Ordered ids from `attachments.upload()` (max 10). Ids are single-use: the
+   * Ordered ids from `attachments.upload()` (max 4). Ids are single-use: the
    * send claims them, and an already-claimed or expired id fails the whole
    * ping. File bytes never ride this JSON body.
    */
@@ -230,7 +230,7 @@ export interface Attachment {
 export type AttachmentExtension = 'md' | 'pdf' | 'html' | 'txt' | 'jpg' | 'jpeg' | 'png';
 
 export interface UploadAttachmentInput {
-  /** File bytes. A Blob/File, a Uint8Array, or a UTF-8 string. */
+  /** File bytes (1 byte–5 MiB). A Blob/File, a Uint8Array, or a UTF-8 string. */
   content: Blob | Uint8Array | string;
   /** Display filename. Its extension must be one of AttachmentExtension. */
   filename: string;
@@ -443,7 +443,7 @@ export interface QuestionInput {
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
-  /** Ordered ids from `attachments.upload()` (max 10). Same single-use rules as PingInput. */
+  /** Ordered ids from `attachments.upload()` (max 4). Same single-use rules as PingInput. */
   attachment_ids?: string[];
 }
 

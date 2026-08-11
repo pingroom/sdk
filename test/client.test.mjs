@@ -575,6 +575,7 @@ test('questions.ask posts the prompt/options to the room questions path', async 
     responder_scope: 'room',
     ttl: 600,
     correlation_id: 'd-1',
+    attachment_ids: ['att_1', 'att_2', 'att_3', 'att_4'],
   });
   assert.equal(q.id, 'q1');
   assert.equal(q.state, 'pending');
@@ -584,6 +585,7 @@ test('questions.ask posts the prompt/options to the room questions path', async 
     responder_scope: 'room',
     ttl: 600,
     correlation_id: 'd-1',
+    attachment_ids: ['att_1', 'att_2', 'att_3', 'att_4'],
   });
 });
 
@@ -1093,16 +1095,19 @@ test('attachments.upload posts multipart and lets the runtime own the boundary',
   assert.equal(await part.text(), '%PDF-');
 });
 
-test('attachment ids ride the ping body while the bytes do not', async () => {
+test('up to four attachment ids ride the ping body while the bytes do not', async () => {
   const { calls, fetchMock } = recorder({
     'POST /api/agent/rooms/AB12/notifications': () => ({ status: 201, body: { id: 'n1' } }),
   });
   const pr = new PingRoom({ token: 'tok_abc', fetch: fetchMock });
 
-  await pr.broadcast('AB12', { message: 'report attached', attachment_ids: ['att_1', 'att_2'] });
+  await pr.broadcast('AB12', {
+    message: 'report attached',
+    attachment_ids: ['att_1', 'att_2', 'att_3', 'att_4'],
+  });
 
   const body = JSON.parse(calls[0].init.body);
-  assert.deepEqual(body.attachment_ids, ['att_1', 'att_2']);
+  assert.deepEqual(body.attachment_ids, ['att_1', 'att_2', 'att_3', 'att_4']);
   assert.equal(calls[0].init.headers['Content-Type'], 'application/json');
 });
 
