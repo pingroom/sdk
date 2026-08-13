@@ -8,10 +8,8 @@ One typed client for everything an agent does: authenticate, create and join roo
 - **Fully typed** — ships `.d.ts`; request fields mirror the HTTP API verbatim.
 - **Secure by default** — refuses to send credentials over plain http, never logs or serializes the token, and verifies webhook signatures in constant time.
 
-> **Release status:** npm currently serves 0.4.0. The corrected attachment
-> limits are in the tested 0.4.1 release candidate on `main` and
-> must not be presented as installed behavior until 0.4.1 is published and
-> clean-install verified.
+> **Release status:** npm serves 0.4.1, including the corrected attachment
+> limits. The published package has been clean-install verified.
 
 ```bash
 npm install @pingroom/sdk
