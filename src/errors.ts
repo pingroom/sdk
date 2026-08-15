@@ -33,6 +33,8 @@ export type HandoffErrorCode =
   | 'invalid_idempotency_key'
   | 'capability_check_unavailable'
   | 'insufficient_scope'
+  // The room is outside the grant the human gave this agent when connecting.
+  | 'room_not_granted'
   | 'free_limit_reached';
 
 export interface PingRoomErrorInit {
