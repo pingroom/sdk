@@ -144,6 +144,8 @@ through 5 MiB each. Every type is content-sniffed against its extension, so a
 `.zip` must be a genuine archive beginning at byte zero. A Ping or Question accepts at most 4; `questions.ask()` takes
 `attachment_ids` too.
 
+`pr.attachments.manifest(id)` lists what is inside a `.zip` — `{entries, total_entries, truncated, total_uncompressed_bytes}` — from the reading the server took at upload. It resolves `null` for anything that is not an archive. Nothing decompresses the file to produce it, so the sizes are what the archive declares.
+
 Ids are single-use: the send claims them, and a claimed or expired id fails the
 whole send. An upload you never attach expires by itself after 24 hours, or you
 can `pr.attachments.delete(id)` it.

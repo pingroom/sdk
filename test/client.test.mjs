@@ -1095,6 +1095,38 @@ test('attachments.upload posts multipart and lets the runtime own the boundary',
   assert.equal(await part.text(), '%PDF-');
 });
 
+test('attachments.manifest returns a zip listing and null for a non-archive', async () => {
+  const { calls, fetchMock } = recorder({
+    'GET /api/agent/attachments/att_zip/manifest': () => ({
+      status: 200,
+      body: {
+        manifest: {
+          entries: [
+            { name: 'src', size_bytes: null, is_directory: true },
+            { name: 'src/index.js', size_bytes: 300, is_directory: false },
+          ],
+          total_entries: 2,
+          truncated: false,
+          total_uncompressed_bytes: 300,
+        },
+      },
+    }),
+    'GET /api/agent/attachments/att_pdf/manifest': () => ({
+      status: 200,
+      body: { manifest: null },
+    }),
+  });
+  const pr = new PingRoom({ token: 'tok_abc', fetch: fetchMock });
+
+  const manifest = await pr.attachments.manifest('att_zip');
+  assert.equal(manifest.total_entries, 2);
+  assert.equal(manifest.entries[1].name, 'src/index.js');
+  assert.equal(manifest.entries[0].size_bytes, null);
+
+  assert.equal(await pr.attachments.manifest('att_pdf'), null);
+  assert.equal(calls.length, 2);
+});
+
 test('up to four attachment ids ride the ping body while the bytes do not', async () => {
   const { calls, fetchMock } = recorder({
     'POST /api/agent/rooms/AB12/notifications': () => ({ status: 201, body: { id: 'n1' } }),

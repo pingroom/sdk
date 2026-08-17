@@ -227,6 +227,26 @@ export interface Attachment {
 }
 
 /** The file types the attachment endpoint accepts. */
+/** One row of a `.zip` attachment's listing. */
+export interface ZipManifestEntry {
+  name: string;
+  /** Null when the archive declared no size, or declared a ZIP64 sentinel. */
+  size_bytes: number | null;
+  is_directory: boolean;
+}
+
+/**
+ * A `.zip` attachment's contents as recorded at upload. Bounded server-side, so
+ * `entries` may be shorter than `total_entries`.
+ */
+export interface ZipManifest {
+  entries: ZipManifestEntry[];
+  total_entries: number;
+  truncated: boolean;
+  /** Sum of the sizes the archive DECLARES. Nothing verifies or expands them. */
+  total_uncompressed_bytes: number;
+}
+
 export type AttachmentExtension =
   | 'md'
   | 'pdf'

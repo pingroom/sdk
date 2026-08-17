@@ -7,6 +7,7 @@ import { McpClient } from './mcp.js';
 import type {
   AcknowledgementWaitResult,
   Attachment,
+  ZipManifest,
   AgentInboxEnsureResult,
   AgentInboxActivateInput,
   AgentInboxActivationQuestion,
@@ -941,6 +942,24 @@ class AttachmentsApi {
     return this.http.raw('GET', `/api/agent/attachments/${enc(attachmentId)}/content`, {
       ...(signal ? { signal } : {}),
     });
+  }
+
+  /**
+   * The listing of a `.zip`'s contents, recorded when it was uploaded.
+   *
+   * Resolves null for a non-archive, and for an archive whose central
+   * directory did not parse. Nothing decompresses the file to produce this, so
+   * the declared sizes are what the archive claims, not verified output.
+   */
+  manifest(attachmentId: string, signal?: AbortSignal): Promise<ZipManifest | null> {
+    requireNonEmpty(attachmentId, 'attachmentId');
+    return this.http
+      .request<{ manifest: ZipManifest | null }>(
+        'GET',
+        `/api/agent/attachments/${enc(attachmentId)}/manifest`,
+        { ...(signal ? { signal } : {}) },
+      )
+      .then((res) => res.manifest ?? null);
   }
 
   /** Discard an upload that has not been attached to a ping yet. */
