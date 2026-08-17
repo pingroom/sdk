@@ -139,8 +139,9 @@ const res = await pr.attachments.content(report.id);
 ```
 
 `content` accepts a `Blob`/`File`, a `Uint8Array`, or a UTF-8 string. Accepted
-types are `md`, `pdf`, `html`, `txt`, `jpg`, `jpeg`, `png`, from 1 byte through
-5 MiB each. A Ping or Question accepts at most 4; `questions.ask()` takes
+types are `md`, `pdf`, `html`, `txt`, `jpg`, `jpeg`, `png`, `zip`, from 1 byte
+through 5 MiB each. Every type is content-sniffed against its extension, so a
+`.zip` must be a genuine archive beginning at byte zero. A Ping or Question accepts at most 4; `questions.ask()` takes
 `attachment_ids` too.
 
 Ids are single-use: the send claims them, and a claimed or expired id fails the

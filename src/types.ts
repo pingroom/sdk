@@ -227,7 +227,15 @@ export interface Attachment {
 }
 
 /** The file types the attachment endpoint accepts. */
-export type AttachmentExtension = 'md' | 'pdf' | 'html' | 'txt' | 'jpg' | 'jpeg' | 'png';
+export type AttachmentExtension =
+  | 'md'
+  | 'pdf'
+  | 'html'
+  | 'txt'
+  | 'jpg'
+  | 'jpeg'
+  | 'png'
+  | 'zip';
 
 export interface UploadAttachmentInput {
   /** File bytes (1 byte–5 MiB). A Blob/File, a Uint8Array, or a UTF-8 string. */

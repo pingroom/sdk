@@ -908,7 +908,7 @@ class LiveApi {
  * Upload first, then pass the returned ids to `broadcast()` / `questions.ask()`
  * as `attachment_ids`. Bytes never travel over MCP or a JSON ping body. An
  * upload that is never attached expires on its own after 24 hours.
- * Each file must be 1 byte–5 MiB with an md/pdf/html/txt/jpg/jpeg/png filename;
+ * Each file must be 1 byte–5 MiB with an md/pdf/html/txt/jpg/jpeg/png/zip filename;
  * a Ping or Question accepts at most four ids.
  *
  * Uploading requires the bound account to hold Pro (the API answers 402
