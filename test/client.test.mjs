@@ -4,10 +4,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  AGENT_INBOX_ERROR_CODES,
+  HANDOFF_ERROR_CODES,
   PingRoom,
   PingRoomActivationIncompleteError,
   PingRoomError,
   PingRoomTimeoutError,
+  ROOM_SCOPED_ERROR_CODES,
+  VERSION,
 } from '../dist/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -15,9 +19,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 test('package and lockfile versions stay aligned', () => {
   const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
   const lock = JSON.parse(readFileSync(join(__dirname, '..', 'package-lock.json'), 'utf8'));
-  assert.equal(pkg.version, '0.4.1');
+  assert.equal(pkg.version, '0.4.2');
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
+  // A VERSION that drifts from package.json makes the SDK misreport itself in
+  // the User-Agent and the MCP clientInfo.
+  assert.equal(VERSION, pkg.version);
 });
 
 /** Build a fetch mock that routes by "METHOD /pathname" and records every call. */
@@ -407,6 +414,103 @@ test('auth.waitForPairing adopts the approved credential and selected room', asy
   assert.equal(active.room.invite_code, 'AB12CD');
   assert.equal(pr.getToken(), 'active_token');
   assert.equal(calls.at(-1).init.headers['Authorization'], 'Bearer active_token');
+});
+
+test('auth.waitForPairing adopts an all-rooms grant that pins no delivery room', async () => {
+  // `room_access: "all"` is the MOST permissive answer the human can give, and
+  // the server sends `room: null` for it because no single destination was
+  // pinned. Treating that as a broken response threw away a working credential.
+  const { calls, fetchMock } = recorder({
+    'GET /api/agent/auth/pair/status': () => ({
+      body: {
+        status: 'active',
+        credential: 'active_token',
+        credential_type: 'active',
+        expires_in: 0,
+        scopes: ['pingroom:rooms:read'],
+        handle: 'agt_deploy',
+        account: { name: 'Ada' },
+        room: null,
+        room_access: 'all',
+        rooms: [],
+      },
+    }),
+    'GET /api/agent/rooms': () => ({ body: [] }),
+  });
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+  const active = await pr.auth.waitForPairing({
+    pair_token: 'pair_123',
+    pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+    expires_in: 10,
+    poll_interval_ms: 1000,
+  });
+  await pr.rooms.list();
+
+  assert.equal(active.credential, 'active_token');
+  assert.equal(active.room, null);
+  assert.equal(active.room_access, 'all');
+  assert.deepEqual(active.rooms, []);
+  assert.equal(active.handle, 'agt_deploy');
+  assert.equal(active.status, undefined);
+  // setToken ran: the credential is adopted, not merely returned.
+  assert.equal(pr.getToken(), 'active_token');
+  assert.equal(calls.at(-1).init.headers['Authorization'], 'Bearer active_token');
+});
+
+test('auth.waitForPairing accepts an omitted room and carries the selected grant', async () => {
+  const { fetchMock } = recorder({
+    // `room` absent entirely, not just null.
+    'GET /api/agent/auth/pair/status': () => ({
+      body: {
+        status: 'active',
+        credential: 'active_token',
+        credential_type: 'active',
+        expires_in: null,
+        scopes: ['pingroom:rooms:read'],
+      },
+    }),
+  });
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+  const active = await pr.auth.waitForPairing({
+    pair_token: 'pair_123',
+    pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+    expires_in: 10,
+    poll_interval_ms: 1000,
+  });
+
+  assert.equal(active.room, undefined);
+  assert.equal(pr.getToken(), 'active_token');
+});
+
+test('auth.waitForPairing still rejects a room that is present but malformed', async () => {
+  for (const room of [{ name: 'Deployments' }, { invite_code: '   ' }, { invite_code: 7 }]) {
+    const { fetchMock } = recorder({
+      'GET /api/agent/auth/pair/status': () => ({
+        body: {
+          status: 'active',
+          credential: 'active_token',
+          credential_type: 'active',
+          expires_in: 0,
+          scopes: ['pingroom:rooms:read'],
+          room,
+        },
+      }),
+    });
+    const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+    await assert.rejects(
+      () => pr.auth.waitForPairing({
+        pair_token: 'pair_123',
+        pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+        expires_in: 10,
+        poll_interval_ms: 1000,
+      }),
+      (e) => e instanceof PingRoomError && e.code === 'pairing_invalid_response',
+    );
+    assert.equal(pr.getToken(), 'pending_token');
+  }
 });
 
 test('auth.waitForPairing reports an expired app link without changing the token', async () => {
@@ -1006,6 +1110,75 @@ test('handoffs surfaces a 409 idempotency_conflict as a typed PingRoomError', as
     () => pr.handoffs.requestAck({ prompt: 'hi', idempotencyKey: 'dup' }),
     (e) => e instanceof PingRoomError && e.code === 'idempotency_conflict' && e.status === 409,
   );
+});
+
+// The exported unions are a promise about the server's `code` vocabulary, so
+// they are pinned here exactly. Each entry below was verified against a live
+// emitter in the API source; a code with no emitter is worse than an untyped
+// one, because it invites callers to write a branch that can never run.
+test('the handoff error codes match the codes the handoff endpoints emit', () => {
+  assert.deepEqual([...HANDOFF_ERROR_CODES], [
+    'feature_temporarily_unavailable', // AgentHandoffController::store
+    'handoff_room_unsupported', //        AgentHandoffController::store
+    'invalid_target', //                  shared send-guard vocabulary
+    'no_room_configured', //              AgentHandoffController::store
+    'target_not_permitted', //            AgentHandoffController::resolveTarget
+    'recipient_not_ready', //             RecipientNotReadyException renderer
+    'idempotency_conflict', //            HandoffService / RequestIdempotency
+    'invalid_idempotency_key', //         RequestIdempotency
+    'capability_check_unavailable', //    CapabilityCheckUnavailableException renderer
+    'insufficient_scope', //              agent.scope middleware
+    'free_limit_reached', //              agent.quota middleware
+  ]);
+
+  // These four had ZERO emitters anywhere in the API and were removed.
+  for (const dead of ['target_not_found', 'target_unavailable', 'pings_closed', 'not_room_member']) {
+    assert.equal(HANDOFF_ERROR_CODES.includes(dead), false, `${dead} has no server emitter`);
+  }
+
+  // `room_not_granted` comes from the `agent.room` gate, and POST /handoffs is
+  // not behind it — it belongs to the room-scoped union instead.
+  assert.equal(HANDOFF_ERROR_CODES.includes('room_not_granted'), false);
+});
+
+test('the room-scoped and inbox error codes match their server emitters', () => {
+  assert.deepEqual([...ROOM_SCOPED_ERROR_CODES], ['room_not_granted']);
+
+  assert.deepEqual([...AGENT_INBOX_ERROR_CODES], [
+    'activation_evidence_unavailable', // AgentInboxController::activate
+    'no_room_configured', //              AgentInboxController::activate
+    'activation_room_muted', //           AgentInboxController::activate
+    'activation_delivery_unavailable', // AgentInboxController
+    'feature_temporarily_unavailable', // AgentInboxController
+  ]);
+
+  // No union may carry a duplicate or a non-snake_case code.
+  for (const codes of [HANDOFF_ERROR_CODES, ROOM_SCOPED_ERROR_CODES, AGENT_INBOX_ERROR_CODES]) {
+    assert.equal(new Set(codes).size, codes.length);
+    for (const code of codes) assert.match(code, /^[a-z][a-z0-9_]*$/);
+  }
+});
+
+test('a room-scoped 403 room_not_granted propagates instead of reading as "no stream"', async () => {
+  const fetchMock = async () =>
+    new Response(
+      JSON.stringify({ code: 'room_not_granted', message: 'not granted' }),
+      { status: 403 },
+    );
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+
+  // liveStatus.get() swallows a 404 only. A permission failure must never be
+  // reported as an absent stream, or a producer would open a duplicate.
+  await assert.rejects(
+    () => pr.live.get('AB12CD', 'corr-1'),
+    (e) => e instanceof PingRoomError && e.code === 'room_not_granted' && e.status === 403,
+  );
+});
+
+test('live.get still resolves null for a genuinely absent stream', async () => {
+  const fetchMock = async () => new Response(JSON.stringify({ message: 'not found' }), { status: 404 });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  assert.equal(await pr.live.get('AB12CD', 'corr-1'), null);
 });
 
 test('mcp.callTool initializes once, notifies the server, and sends the negotiated protocol header', async () => {

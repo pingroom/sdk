@@ -313,9 +313,14 @@ class AuthApi {
               && (typeof status.expires_in !== 'number'
                 || !Number.isFinite(status.expires_in)
                 || status.expires_in < 0))
-            || !status.room
-            || typeof status.room.invite_code !== 'string'
-            || status.room.invite_code.trim() === ''
+            // A null/absent `room` is VALID: under `room_access: 'all'` the
+            // human granted every room and pinned no single delivery room, so
+            // the server sends `room: null`. Rejecting that threw away a good
+            // credential on the most permissive grant. Only a room that is
+            // PRESENT but malformed is a broken response.
+            || (status.room != null
+              && (typeof status.room.invite_code !== 'string'
+                || status.room.invite_code.trim() === ''))
           ) {
             throw new PingRoomError('PingRoom returned an incomplete approved pairing.', {
               code: 'pairing_invalid_response',
@@ -885,8 +890,13 @@ class LiveApi {
 
   /**
    * Read back a stream this credential started, so a restarted producer can
-   * reconcile instead of opening a duplicate. Returns null when there is no
-   * such stream in the last 24 hours.
+   * reconcile instead of opening a duplicate.
+   *
+   * Resolves null for a 404 ONLY — no stream with that correlation id in the
+   * last 24 hours. Every other failure throws: in particular a 403
+   * `room_not_granted` ({@link RoomScopedErrorCode}), raised when the room is
+   * outside the grant the human gave this agent, propagates rather than being
+   * reported as "no stream".
    */
   async get(inviteCode: string, correlationId: string): Promise<LiveStatusSnapshot | null> {
     requireNonEmpty(inviteCode, 'inviteCode');

@@ -20,12 +20,18 @@ export {
   PingRoomTimeoutError,
   PingRoomNetworkError,
   PingRoomActivationIncompleteError,
+  AGENT_INBOX_ERROR_CODES,
+  HANDOFF_ERROR_CODES,
+  ROOM_SCOPED_ERROR_CODES,
 } from './errors.js';
 export type {
+  AgentErrorCode,
   AgentInboxActivationIncompleteReason,
+  AgentInboxErrorCode,
   ApiErrorBody,
   HandoffErrorCode,
   PingRoomErrorInit,
+  RoomScopedErrorCode,
 } from './errors.js';
 
 export {

@@ -71,9 +71,20 @@ const pairing = await pr.auth.startPairing({
 console.log(`Open in PingRoom: ${pairing.pair_url}`);
 const active = await pr.auth.waitForPairing(pairing);
 
-// The approver chose this room, and the client now uses the active credential.
-await pr.broadcast(active.room.invite_code, { message: 'SDK connected ✅' });
+// The client now uses the active credential. `active.room` is the delivery
+// room the approver picked — and it is NULL when they granted `all` rooms,
+// which pins no single destination. Read `room_access` before assuming one.
+if (active.room) {
+  await pr.broadcast(active.room.invite_code, { message: 'SDK connected ✅' });
+} else {
+  // room_access === 'all' — every room the account is in. List and choose.
+  const [room] = await pr.rooms.list();
+  if (room) await pr.broadcast(room.invite_code, { message: 'SDK connected ✅' });
+}
 ```
+
+The grant also comes back as `active.room_access` (`'all'` | `'selected'`) and
+`active.rooms` (`{ id, invite_code, name }[]`, empty under `'all'`).
 
 `waitForPairing()` tolerates short network outages and stops when the app link
 expires. Pass an `AbortSignal` when your process needs its own cancellation.
@@ -345,7 +356,7 @@ await pr.handoffs.list({ state: 'open' }); // your open handoffs
 await pr.handoffs.list({ state: 'all' });  // recent history (up to 200 per kind)
 ```
 
-Create/read map coded failures onto `PingRoomError` — branch on `error.code` (see [`HandoffErrorCode`](#errors)). The exported union includes target-policy, scope/quota, idempotency, feature, and capability failures; `capability_check_unavailable` is retryable. Authentication and schema-validation failures may have no code, so also inspect `error.status`.
+Create/read map coded failures onto `PingRoomError` — branch on `error.code` (see [`HandoffErrorCode`](#errors)). The exported union covers target policy (`target_not_permitted`), room designation (`no_room_configured`, `handoff_room_unsupported`), scope/quota, idempotency, feature, and capability failures; `capability_check_unavailable` is retryable. Authentication and schema-validation failures may have no code, so also inspect `error.status`. `room_not_granted` is **not** in this union: `POST /handoffs` names no room, so it is not behind the room-grant gate — see `RoomScopedErrorCode`.
 
 ## Incoming webhooks (no token needed)
 
@@ -448,7 +459,9 @@ await pr.live.push('AB12CD', liveStatus.done('deploy-42', 'Shipped v1.4.0'));
 // ...or liveStatus.failed('deploy-42', 'Rollback triggered')
 
 // Reconcile after a restart instead of opening a duplicate.
-// Returns null (not a throw) when there is no such stream in the last 24 hours.
+// Returns null for a 404 ONLY — no such stream in the last 24 hours. Every
+// other failure throws, including a 403 `room_not_granted`, so a permission
+// problem is never mistaken for an absent stream.
 const snap = await pr.live.get('AB12CD', 'deploy-42');
 if (snap) console.log(snap.template, snap.current_step, snap.updated_at);
 ```
@@ -524,7 +537,7 @@ const profile = await pr.directory.get('agt_deploybell');
 
 ## Errors
 
-Every failure rejects with a `PingRoomError` carrying the HTTP `status` and the API's machine `code` (e.g. `pings_closed`, `cooldown`, `rate_limited`), plus `retryAfter` when present:
+Every failure rejects with a `PingRoomError` carrying the HTTP `status` and the API's machine `code` (e.g. `cooldown`, `rate_limited`, `room_not_granted`), plus `retryAfter` when present:
 
 ```ts
 import { PingRoomError } from '@pingroom/sdk';
@@ -537,6 +550,16 @@ try {
   }
 }
 ```
+
+The coded vocabulary is exported both as types and as runtime arrays, one per
+surface, so you can branch exhaustively:
+
+| Export | Emitted by |
+| --- | --- |
+| `HandoffErrorCode` / `HANDOFF_ERROR_CODES` | `handoffs.*` |
+| `RoomScopedErrorCode` / `ROOM_SCOPED_ERROR_CODES` | every call whose path names a room (`rooms.get`, `actions.*`, `broadcast`, `webhooks.*`, `live.*`) |
+| `AgentInboxErrorCode` / `AGENT_INBOX_ERROR_CODES` | `inbox.ensure()` / `inbox.activate()` |
+| `AgentErrorCode` | all three, for one shared branch |
 
 ## Configuration
 

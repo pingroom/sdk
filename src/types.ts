@@ -66,6 +66,27 @@ export interface RegisterParams {
   agent_label?: string;
 }
 
+/**
+ * How wide the human made this agent's room grant.
+ *
+ * `'all'` — every room the account is in; the grant lists none, and no single
+ * delivery room is pinned. `'selected'` — exactly the rooms in `rooms`.
+ */
+export type AgentRoomAccess = 'all' | 'selected';
+
+/** One room inside an agent's grant. */
+export interface AgentAccessRoom {
+  id: string;
+  invite_code: string;
+  name: string;
+}
+
+/** The delivery room: where handoffs and questions land. */
+export interface AgentDeliveryRoom {
+  invite_code: string;
+  name?: string | null;
+}
+
 export interface Credential {
   credential: string;
   credential_type: 'pre_claim' | 'active';
@@ -74,7 +95,11 @@ export interface Credential {
   handle?: string;
   claim?: { start_uri: string; complete_uri: string };
   account?: { name?: string | null } | null;
-  room?: { invite_code: string; name?: string | null } | null;
+  /** The delivery room, or null when the human pinned none. */
+  room?: AgentDeliveryRoom | null;
+  room_access?: AgentRoomAccess | null;
+  /** The full grant. Empty under `room_access: 'all'`. */
+  rooms?: AgentAccessRoom[];
 }
 
 export interface ClaimStartParams {
@@ -104,7 +129,15 @@ export interface PairingStart {
 
 export interface PairedCredential extends Credential {
   credential_type: 'active';
-  room: { invite_code: string; name?: string | null };
+  /**
+   * The delivery room the human picked, or NULL when they granted `all` rooms
+   * and so pinned no single destination. Null is a valid, fully usable
+   * credential — check `room_access` before assuming a room exists.
+   */
+  room: AgentDeliveryRoom | null;
+  room_access: AgentRoomAccess;
+  /** The full grant. Empty under `room_access: 'all'`. */
+  rooms: AgentAccessRoom[];
 }
 
 export type PairingStatus =

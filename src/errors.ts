@@ -14,28 +14,81 @@ export interface ApiErrorBody {
 }
 
 /**
+ * The codes the `agent.room` gate emits on every ROOM-SCOPED route — the ones
+ * whose path carries an invite code: `rooms.get()`, `actions.list()`,
+ * `actions.trigger()`, `broadcast()`, the webhook calls, and
+ * `liveStatus.get()`/`liveStatus.push()`. HTTP 403.
+ *
+ * NOT reachable from `handoffs.create()`: `POST /api/agent/handoffs` names no
+ * room in its path and so is not behind that gate.
+ *
+ * Server: `EnsureAgentRoomAccess` middleware.
+ */
+export const ROOM_SCOPED_ERROR_CODES = [
+  // The room is outside the grant the human gave this agent when connecting.
+  'room_not_granted',
+] as const;
+
+/**
  * The machine `code`s a handoff create/read can surface on a {@link PingRoomError}.
- * Branch on `error.code` (and `error.status`) instead of the message:
+ * Branch on `error.code` (and `error.status`) instead of the message.
  *
  * Authentication and schema-validation failures may have no machine code; use
  * `status` for those responses. This union covers every coded Handoff response.
+ *
+ * Server: `AgentHandoffController`, `HandoffService`, `RequestIdempotency`, the
+ * `agent.scope`/`agent.quota` middleware, and the `RecipientNotReady` /
+ * `CapabilityCheckUnavailable` renderers in `bootstrap/app.php`.
  */
-export type HandoffErrorCode =
-  | 'feature_temporarily_unavailable'
-  | 'handoff_room_unsupported'
-  | 'invalid_target'
-  | 'target_not_found'
-  | 'target_unavailable'
-  | 'pings_closed'
-  | 'not_room_member'
-  | 'recipient_not_ready'
-  | 'idempotency_conflict'
-  | 'invalid_idempotency_key'
-  | 'capability_check_unavailable'
-  | 'insufficient_scope'
-  // The room is outside the grant the human gave this agent when connecting.
-  | 'room_not_granted'
-  | 'free_limit_reached';
+export const HANDOFF_ERROR_CODES = [
+  'feature_temporarily_unavailable',
+  'handoff_room_unsupported',
+  'invalid_target',
+  // The agent has no delivery room designated; the human must pick one.
+  'no_room_configured',
+  // An agent may hand off only to the account that connected it.
+  'target_not_permitted',
+  'recipient_not_ready',
+  'idempotency_conflict',
+  'invalid_idempotency_key',
+  'capability_check_unavailable',
+  'insufficient_scope',
+  'free_limit_reached',
+] as const;
+
+/**
+ * The coded failures of the Inbox activation path (`inbox.ensure()` /
+ * `inbox.activate()`). All HTTP 409 except `feature_temporarily_unavailable`,
+ * which is 422.
+ *
+ * Server: `AgentInboxController`.
+ */
+export const AGENT_INBOX_ERROR_CODES = [
+  // Already activated, but the original connection-test record is gone.
+  'activation_evidence_unavailable',
+  // The human must pick the room this agent pings them in.
+  'no_room_configured',
+  // The chosen room is muted, or the human is no longer a member of it.
+  'activation_room_muted',
+  // No device could render the activation Question.
+  'activation_delivery_unavailable',
+  'feature_temporarily_unavailable',
+] as const;
+
+/** @see ROOM_SCOPED_ERROR_CODES */
+export type RoomScopedErrorCode = (typeof ROOM_SCOPED_ERROR_CODES)[number];
+
+/** @see HANDOFF_ERROR_CODES */
+export type HandoffErrorCode = (typeof HANDOFF_ERROR_CODES)[number];
+
+/** @see AGENT_INBOX_ERROR_CODES */
+export type AgentInboxErrorCode = (typeof AGENT_INBOX_ERROR_CODES)[number];
+
+/**
+ * Every machine `code` this SDK's typed unions cover, for callers that branch
+ * once across surfaces instead of per-endpoint.
+ */
+export type AgentErrorCode = HandoffErrorCode | RoomScopedErrorCode | AgentInboxErrorCode;
 
 export interface PingRoomErrorInit {
   status?: number;
