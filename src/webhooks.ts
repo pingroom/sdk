@@ -13,7 +13,13 @@
 
 import { PingRoomError } from './errors.js';
 import { combineSignals } from './internal/async.js';
-import { assertActionNumber, assertStructuredData } from './internal/guards.js';
+import {
+  assertActionNumber,
+  assertMaxLength,
+  assertStructuredData,
+  MAX_PING_TITLE_LENGTH,
+  MAX_PUBLIC_PING_MESSAGE_LENGTH,
+} from './internal/guards.js';
 import { assertSecureUrl } from './internal/url.js';
 import type { LiveStatus } from './liveStatus.js';
 import type { ActionState, FetchLike, JsonObject } from './types.js';
@@ -82,7 +88,9 @@ export async function verifyWebhookSignature(opts: VerifyWebhookSignatureOptions
 }
 
 export interface IncomingWebhookPayload {
+  /** Visible Ping body (≤ 120 characters in private rooms; ≤ 160 in public rooms). */
   message?: string;
+  /** Visible Ping title (≤ 40 characters). */
   title?: string;
   /** Quick-action slot to attribute the ping to (1–4). */
   action?: number;
@@ -168,6 +176,10 @@ export async function sendIncomingWebhook(
   options: SendIncomingWebhookOptions = {},
 ): Promise<IncomingWebhookResult> {
   assertSecureUrl(webhookUrl, options.allowInsecure ?? false);
+  // A webhook URL does not reveal room visibility, so validate the public
+  // ceiling here and let the server enforce 120 for private rooms.
+  assertMaxLength(payload.message, MAX_PUBLIC_PING_MESSAGE_LENGTH, 'message');
+  assertMaxLength(payload.title, MAX_PING_TITLE_LENGTH, 'title');
   assertActionNumber(payload.action);
   assertStructuredData(payload.data);
 

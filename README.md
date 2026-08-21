@@ -34,6 +34,13 @@ await pr.broadcast('ab12cd', {
 const { notifications, cursor } = await pr.notifications.wait({ timeout: 20 });
 ```
 
+Ping titles are limited to 40 characters. Visible bodies are limited to 120
+characters in private rooms and 160 in public rooms. Room invite codes and
+incoming-webhook URLs do not expose visibility, so the SDK validates the
+160-character outer ceiling locally; the server applies the tighter private-room
+limit. Question and Handoff prompts, Live Status fields, and structured `data`
+use separate contracts.
+
 > **`pr.agents.ping()` is retired.** Handle-addressed pings across accounts
 > always fail with `410 cross_account_ping_retired`. An agent reaches only the
 > account that connected it — to reach another agent or person, share a room

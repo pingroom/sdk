@@ -166,6 +166,52 @@ test('sendIncomingWebhook posts JSON and returns the result', async () => {
   });
 });
 
+test('sendIncomingWebhook accepts the public-room Ping text boundaries', async () => {
+  let captured;
+  const fetchMock = async (_url, init) => {
+    captured = JSON.parse(init.body);
+    return new Response('{"success":true}', { status: 201 });
+  };
+  const message = 'm'.repeat(160);
+  const title = 't'.repeat(40);
+
+  await sendIncomingWebhook(
+    'https://api.pingroom.io/api/webhooks/AB12/secret',
+    { message, title },
+    { fetch: fetchMock },
+  );
+
+  assert.deepEqual(captured, { title, message });
+});
+
+test('sendIncomingWebhook rejects Ping text over the public ceiling before fetching', async () => {
+  let requests = 0;
+  const options = {
+    fetch: async () => {
+      requests += 1;
+      return new Response('{"success":true}');
+    },
+  };
+
+  await assert.rejects(
+    () => sendIncomingWebhook(
+      'https://api.pingroom.io/api/webhooks/AB12/secret',
+      { message: 'm'.repeat(161) },
+      options,
+    ),
+    (error) => error instanceof PingRoomError && /message.*160.*161/.test(error.message),
+  );
+  await assert.rejects(
+    () => sendIncomingWebhook(
+      'https://api.pingroom.io/api/webhooks/AB12/secret',
+      { message: 'ok', title: 't'.repeat(41) },
+      options,
+    ),
+    (error) => error instanceof PingRoomError && /title.*40.*41/.test(error.message),
+  );
+  assert.equal(requests, 0);
+});
+
 // The allowlist that builds the request body has silently dropped fields twice
 // (live_status before 0.3.1, then emoji/icon/color/sound). Both were invisible:
 // the server accepts the truncated body and answers 200. These two tests pin the

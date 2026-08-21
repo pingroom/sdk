@@ -221,9 +221,12 @@ export interface Room {
 
 // --- pings / notifications ------------------------------------------------
 
-/** The body of a ping — used for broadcasts and the retired direct-ping compatibility method. */
+/** A visible Ping — used for broadcasts and the retired direct-ping compatibility method. */
 export interface PingInput {
+  /** Visible body (≤ 120 characters in private rooms; ≤ 160 in public rooms). */
   message: string;
+  /** Optional visible title (≤ 40 characters). */
+  title?: string;
   action_number?: number;
   action_icon?: string;
   /**

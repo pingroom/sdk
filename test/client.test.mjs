@@ -104,6 +104,47 @@ test('broadcast posts the ping body to the right path', async () => {
   });
 });
 
+test('broadcast accepts public-room Ping boundaries and forwards the title', async () => {
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/rooms/public1/notifications': () => ({
+      status: 201,
+      body: { id: 'n1', message: 'ok', created_at: 'now', action_number: null, action_icon: null, trigger_source: null },
+    }),
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  const message = 'm'.repeat(160);
+  const title = 't'.repeat(40);
+
+  await pr.broadcast('public1', { message, title });
+
+  assert.deepEqual(JSON.parse(calls[0].init.body), { message, title });
+});
+
+test('broadcast rejects only the public ceiling locally and leaves private-room enforcement to the server', async () => {
+  let requests = 0;
+  const pr = new PingRoom({
+    token: 't',
+    fetch: async () => {
+      requests += 1;
+      return new Response('{}', { status: 201 });
+    },
+  });
+
+  assert.throws(
+    () => pr.broadcast('ab12', { message: 'm'.repeat(161) }),
+    (error) => error instanceof PingRoomError
+      && error.code === 'invalid_request'
+      && /message.*160.*161/.test(error.message),
+  );
+  assert.throws(
+    () => pr.broadcast('ab12', { message: 'ok', title: 't'.repeat(41) }),
+    (error) => error instanceof PingRoomError
+      && error.code === 'invalid_request'
+      && /title.*40.*41/.test(error.message),
+  );
+  assert.equal(requests, 0);
+});
+
 test('agents.ping hits the handle path', async () => {
   const { calls, fetchMock } = recorder({
     'POST /api/agent/agents/agt_x/ping': () => ({

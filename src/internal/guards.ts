@@ -3,6 +3,30 @@ import { PingRoomError } from '../errors.js';
 /** Mirrors the server's structured-`data` limits so oversized payloads fail fast, locally. */
 export const MAX_DATA_BYTES = 8 * 1024;
 export const MAX_DATA_KEYS = 25;
+export const MAX_PRIVATE_PING_MESSAGE_LENGTH = 120;
+export const MAX_PUBLIC_PING_MESSAGE_LENGTH = 160;
+export const MAX_PING_TITLE_LENGTH = 40;
+
+/** Count Unicode code points, matching Laravel's multibyte string validation. */
+function characterLength(value: string): number {
+  return Array.from(value).length;
+}
+
+export function assertMaxLength(value: unknown, max: number, field: string): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+  if (typeof value !== 'string') {
+    throw new PingRoomError(`\`${field}\` must be a string.`, { code: 'invalid_request' });
+  }
+  const length = characterLength(value);
+  if (length > max) {
+    throw new PingRoomError(
+      `\`${field}\` may have at most ${max} characters (got ${length}).`,
+      { code: 'invalid_request' },
+    );
+  }
+}
 
 export function assertStructuredData(data: unknown): void {
   if (data === undefined || data === null) {

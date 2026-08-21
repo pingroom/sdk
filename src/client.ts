@@ -1,7 +1,14 @@
 import { PingRoomActivationIncompleteError, PingRoomError } from './errors.js';
 import { HttpClient } from './http.js';
 import { combineSignals, sleep } from './internal/async.js';
-import { assertActionNumber, assertStructuredData, requireNonEmpty } from './internal/guards.js';
+import {
+  assertActionNumber,
+  assertMaxLength,
+  assertStructuredData,
+  MAX_PING_TITLE_LENGTH,
+  MAX_PUBLIC_PING_MESSAGE_LENGTH,
+  requireNonEmpty,
+} from './internal/guards.js';
 import type { LiveStatusPing, LiveStatusResult, LiveStatusSnapshot } from './liveStatus.js';
 import { McpClient } from './mcp.js';
 import type {
@@ -95,6 +102,10 @@ function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
 
 function assertPing(ping: PingInput): void {
   requireNonEmpty(ping.message, 'message');
+  // The invite code does not expose room visibility. Permit the public-room
+  // ceiling locally; Laravel applies 120 for private and 160 for public rooms.
+  assertMaxLength(ping.message, MAX_PUBLIC_PING_MESSAGE_LENGTH, 'message');
+  assertMaxLength(ping.title, MAX_PING_TITLE_LENGTH, 'title');
   assertActionNumber(ping.action_number);
   assertStructuredData(ping.data);
 }
