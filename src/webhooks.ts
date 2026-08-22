@@ -115,8 +115,17 @@ export interface IncomingWebhookPayload {
    * See https://pingroom.io/liveactivities.md
    */
   live_status?: LiveStatus;
-  /** Override the selected quick action and require acknowledgement for this ping. */
+  /**
+   * Override the selected quick action and require acknowledgement for this
+   * ping. Does NOT raise the delivery priority — that is {@link is_urgent}.
+   */
   requires_ack?: boolean;
+  /**
+   * Deliver time-sensitive so the ping breaks through Focus / Do Not Disturb.
+   * Payload-only and independent of `requires_ack`: a webhook trigger has no
+   * stored urgency policy to inherit from the quick action it fires.
+   */
+  is_urgent?: boolean;
   /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. */
   ack_timeout_seconds?: number | null;
 }
@@ -162,6 +171,7 @@ export const INCOMING_WEBHOOK_FIELDS = [
   'data',
   'correlation_id',
   'reply_to',
+  'is_urgent',
   'requires_ack',
   'ack_timeout_seconds',
   // Top level, never folded into `data` — the server routes on this key and

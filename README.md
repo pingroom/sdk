@@ -30,6 +30,16 @@ await pr.broadcast('ab12cd', {
   ack_timeout_seconds: 300,
 });
 
+// `is_urgent` and `requires_ack` are independent. Urgent changes DELIVERY —
+// the push breaks through Focus / Do Not Disturb — and asks nothing of the
+// recipient. `requires_ack` holds the ping open until someone taps Acknowledge
+// on the lock-screen card, and does not raise the interruption level on its
+// own. Set both for an acknowledgement that also cuts through Focus.
+await pr.broadcast('ab12cd', {
+  message: 'Prod is down',
+  is_urgent: true,
+});
+
 // Listen for what comes back
 const { notifications, cursor } = await pr.notifications.wait({ timeout: 20 });
 ```

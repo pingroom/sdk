@@ -104,6 +104,38 @@ test('broadcast posts the ping body to the right path', async () => {
   });
 });
 
+// Urgency and acknowledgement are independent flags on the wire. They were one
+// (`requires_ack`, which also raised the interruption level), so a caller asking
+// for a ping that cuts through Focus also demanded an acknowledgement.
+test('broadcast forwards is_urgent without implying requires_ack', async () => {
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/rooms/ab12/notifications': () => ({
+      status: 201,
+      body: { id: 'n1', message: 'prod is down', created_at: 'now', action_number: null, action_icon: null, trigger_source: null },
+    }),
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  await pr.broadcast('ab12', { message: 'prod is down', is_urgent: true });
+
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    message: 'prod is down',
+    is_urgent: true,
+  });
+});
+
+test('trigger forwards a one-shot is_urgent for a single quick-action press', async () => {
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/rooms/ab12/actions/2/trigger': () => ({
+      status: 201,
+      body: { id: 'n2', message: 'pressed', created_at: 'now', action_number: 2, action_icon: null, trigger_source: 'manual' },
+    }),
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  await pr.actions.trigger('ab12', 2, { is_urgent: true });
+
+  assert.deepEqual(JSON.parse(calls[0].init.body), { is_urgent: true });
+});
+
 test('broadcast accepts public-room Ping boundaries and forwards the title', async () => {
   const { calls, fetchMock } = recorder({
     'POST /api/agent/rooms/public1/notifications': () => ({

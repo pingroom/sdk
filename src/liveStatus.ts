@@ -193,9 +193,12 @@ export const liveStatus = {
    * through Focus.
    *
    * This is a `category`, not a `template`: `alert` has no template equivalent,
-   * and it is the only way to start time-sensitive WITHOUT also setting
-   * `requires_ack` (which demands somebody tap). Fixed at creation, like
-   * `template`.
+   * and it is the only way to start a STREAM time-sensitive. Fixed at creation,
+   * like `template`.
+   *
+   * (`requires_ack` is unrelated: it demands somebody tap, and since urgency and
+   * acknowledgement were split it no longer raises the interruption level at
+   * all. For a one-shot ping the delivery-priority flag is `is_urgent`.)
    */
   alert(correlationId: string, live: Omit<LiveStatus, 'template' | 'category'>, rest?: Rest): LiveStatusPing {
     return ping(correlationId, { category: 'alert', ...live }, rest);

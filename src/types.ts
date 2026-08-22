@@ -243,9 +243,23 @@ export interface PingInput {
    * ping. File bytes never ride this JSON body.
    */
   attachment_ids?: string[];
-  /** Open the acknowledgement lifecycle for this ping. First acknowledgement wins. */
+  /**
+   * Open the acknowledgement lifecycle for this ping. First acknowledgement
+   * wins, and recipients see a lock-screen card with an Acknowledge button.
+   *
+   * Does NOT raise the delivery priority — that is {@link SendPingInput.is_urgent},
+   * and the two are independent. They were one flag, which meant asking for a
+   * ping that cuts through Focus also demanded that somebody acknowledge it.
+   */
   requires_ack?: boolean;
-  /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. */
+  /**
+   * Deliver time-sensitive so the ping breaks through Focus / Do Not Disturb.
+   * Delivery priority only: no acknowledgement, no Live Activity, nothing asked
+   * of the recipient. Set alongside `requires_ack` for an acknowledgement that
+   * also cuts through Focus.
+   */
+  is_urgent?: boolean;
+  /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. Ignored unless `requires_ack` is set. */
   ack_timeout_seconds?: number | null;
 }
 
@@ -305,6 +319,13 @@ export interface UploadAttachmentInput {
 
 export interface TriggerInput {
   trigger_source?: string;
+  /**
+   * Deliver this one press time-sensitive so it breaks through Focus / Do Not
+   * Disturb. Send-time only — the action's saved configuration is untouched,
+   * and quick actions have no stored urgency policy to override. Never implies
+   * `requires_ack`, which is the action's own saved acknowledgement policy.
+   */
+  is_urgent?: boolean;
 }
 
 /** The server-authoritative acknowledgement lifecycle attached to a ping. */
@@ -373,6 +394,8 @@ export type NotificationDetail = Omit<AgentNotification, 'room'> & {
   sender_id?: string;
   type?: string;
   requires_ack?: boolean;
+  /** Whether this ping was delivered time-sensitive. Independent of `requires_ack`. */
+  is_urgent?: boolean;
   action_state: ActionState | null;
   room?: Room;
   [key: string]: unknown;
