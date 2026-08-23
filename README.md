@@ -71,6 +71,35 @@ await pr.broadcast('ab12cd', {
 });
 ```
 
+### Location pings
+
+A ping carries a map-ready point under the reserved `data.location` key. The
+`locationPing()` helper validates decimal coordinates and the optional display
+text, while still letting you keep unrelated structured data beside it:
+
+```ts
+import { PingRoom, locationPing } from '@pingroom/sdk';
+
+await pr.broadcast('ab12cd', {
+  message: 'Meet me here',
+  data: {
+    event: 'lunch',
+    ...locationPing({
+      latitude: 25.2048,
+      longitude: 55.2708,
+      label: 'Dubai Mall',
+      address: 'Downtown Dubai',
+    }),
+  },
+});
+```
+
+Latitude must be within -90..90 and longitude within -180..180. `label` is
+limited to 100 Unicode characters and `address` to 255. Recipients can share
+the point or open it in an installed maps app. When reading pings,
+`extractLocationPing(ping.data)` returns the validated location or `null` for
+legacy or malformed data.
+
 > Security note: an agent credential is a bearer token. Keep it server-side. Do not embed a long-lived token in a browser bundle or a public client.
 
 ## Authentication

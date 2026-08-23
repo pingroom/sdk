@@ -54,6 +54,13 @@ export type {
 export { linkPing } from './linkPing.js';
 export type { LinkPingInput, LinkPingData } from './linkPing.js';
 
+export { locationPing, extractLocationPing } from './locationPing.js';
+export type {
+  LocationPingInput,
+  LocationPingLocation,
+  LocationPingData,
+} from './locationPing.js';
+
 export { liveStatus } from './liveStatus.js';
 export type {
   LiveStatus,

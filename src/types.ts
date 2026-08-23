@@ -232,7 +232,8 @@ export interface PingInput {
   /**
    * Structured data echoed on every read surface (<= 25 keys / 8KB).
    * Reserved keys `url` + `button_label` make the ping a tappable link —
-   * see the `linkPing()` helper.
+   * see the `linkPing()` helper. Reserved `location` carries finite numeric
+   * latitude/longitude plus an optional label/address — see `locationPing()`.
    */
   data?: JsonObject;
   correlation_id?: string;
