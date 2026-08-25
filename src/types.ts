@@ -319,7 +319,11 @@ export interface UploadAttachmentInput {
 }
 
 export interface TriggerInput {
-  trigger_source?: string;
+  /**
+   * Only the sources a device legitimately originates. `webhook`/`system` are
+   * stamped server-side and are rejected here.
+   */
+  trigger_source?: 'manual' | 'location';
   /**
    * Deliver this one press time-sensitive so it breaks through Focus / Do Not
    * Disturb. Send-time only — the action's saved configuration is untouched,
@@ -327,6 +331,13 @@ export interface TriggerInput {
    * `requires_ack`, which is the action's own saved acknowledgement policy.
    */
   is_urgent?: boolean;
+  /**
+   * One-shot acknowledgement modifier for this press only. It is OR-ed with the
+   * action's stored policy, so it can only ADD an ack requirement — passing
+   * `false` never removes one from an action already configured to require it.
+   * The action's saved configuration is untouched either way.
+   */
+  requires_ack?: boolean;
 }
 
 /** The server-authoritative acknowledgement lifecycle attached to a ping. */
@@ -373,24 +384,45 @@ export interface DirectPingResult {
   [key: string]: unknown;
 }
 
-export interface AgentNotification {
+/**
+ * The named fields of a listened/listed notification, without the index
+ * signature. `Omit` collapses a type carrying a string index signature down to
+ * that signature alone, so `NotificationDetail` derives from this rather than
+ * from `AgentNotification` — otherwise every named field would widen to
+ * `unknown`.
+ */
+interface AgentNotificationFields {
   id: string;
   message: string;
   action_number: number | null;
   action_icon: string | null;
   trigger_source: string | null;
+  /**
+   * True when this ping is an agent handoff (a request to take over a
+   * conversation) rather than an ordinary ping.
+   */
+  is_handoff?: boolean;
   data?: JsonObject | null;
   correlation_id?: string | null;
   reply_to?: string | null;
   attachments?: Attachment[];
   action_state?: ActionState | null;
+  /**
+   * The embedded Question when this ping carries one, else null. Same wire
+   * shape as the dedicated Question read paths.
+   */
+  question?: Question | null;
   created_at: string;
   room?: { code: string; name: string; icon: string | null; color: string | null };
   sender?: { id: string; name: string | null };
 }
 
+export interface AgentNotification extends AgentNotificationFields {
+  [key: string]: unknown;
+}
+
 /** Full notification record returned by the single-notification read path. */
-export type NotificationDetail = Omit<AgentNotification, 'room'> & {
+export type NotificationDetail = Omit<AgentNotificationFields, 'room'> & {
   room_id?: string;
   sender_id?: string;
   type?: string;

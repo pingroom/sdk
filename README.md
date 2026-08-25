@@ -8,8 +8,10 @@ One typed client for everything an agent does: authenticate, create and join roo
 - **Fully typed** — ships `.d.ts`; request fields mirror the HTTP API verbatim.
 - **Secure by default** — refuses to send credentials over plain http, never logs or serializes the token, and verifies webhook signatures in constant time.
 
-> **Release status:** npm serves 0.4.1, including the corrected attachment
-> limits. The published package has been clean-install verified.
+> **Release status:** npm serves 0.4.3. This source tree is 0.4.4 —
+> unpublished — adding the `locationPing()` helper, the one-shot
+> `requires_ack` modifier on `actions.trigger()`, and the `question` /
+> `is_handoff` fields on listened notifications.
 
 ```bash
 npm install @pingroom/sdk
@@ -171,7 +173,20 @@ await pr.rooms.join({ invite_code: 'ab12cd' });
 
 await pr.actions.update('ab12cd', 1, { label: 'Approve', icon: 'check' });
 await pr.actions.trigger('ab12cd', 1);
+
+// One-shot modifiers on a single press. `trigger_source` is `manual` (default)
+// or `location`; `webhook`/`system` are stamped server-side and rejected here.
+await pr.actions.trigger('ab12cd', 1, {
+  trigger_source: 'location',
+  is_urgent: true,
+  requires_ack: true,
+});
 ```
+
+`requires_ack` on `trigger()` is OR-ed with the action's stored policy, so it can
+only **add** an acknowledgement requirement for that one press — passing `false`
+never removes one from an action already configured to require it. Neither
+modifier edits the action's saved configuration.
 
 ## Attachments
 
@@ -221,6 +236,21 @@ const ac = new AbortController();
 for await (const ping of pr.notifications.listen({ signal: ac.signal })) {
   console.log(ping.sender?.name, ping.message, ping.data);
   if (ping.message === 'stop') ac.abort();
+}
+```
+
+A listened ping carries two fields worth branching on. `ping.is_handoff` is true
+when the ping is a handoff rather than an ordinary ping, and `ping.question` is
+the embedded `Question` (the same wire shape `pr.questions` returns) when the
+ping carries one, else `null`:
+
+```ts
+for await (const ping of pr.notifications.listen({ signal: ac.signal })) {
+  if (ping.question) {
+    console.log(ping.question.prompt, ping.question.options.map((o) => o.value));
+  } else if (ping.is_handoff) {
+    console.log('handed off to me:', ping.message);
+  }
 }
 ```
 
