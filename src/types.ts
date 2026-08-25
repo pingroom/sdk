@@ -584,8 +584,13 @@ export interface QuestionAnswer {
   label: string | null;
   /** The typed answer, when the question invited one. */
   text: string | null;
-  /** The authenticated human who answered (never caller-supplied). */
-  responder: { id: string; display_name: string | null } | null;
+  /**
+   * The authenticated human who answered (never caller-supplied). Present once
+   * the question is decided — but every field is redacted to `null` when the
+   * caller is not entitled to see who answered, so `id` is nullable even here.
+   * Matches `HandoffAnswer.responder`.
+   */
+  responder: { id: string | null; display_name: string | null } | null;
   answered_at: string | null;
 }
 
@@ -611,7 +616,12 @@ export interface Question {
   room?: { code: string; name: string; icon: string | null; color: string | null };
   room_code?: string;
   asker?: {
-    type: 'agent';
+    /**
+     * `'user'` for a human-asked Question (composer "Add Options"), `'agent'`
+     * when an agent asked it. Both reach an agent's listen/list feed, so this
+     * cannot be narrowed to `'agent'`.
+     */
+    type: 'agent' | 'user';
     id: string | null;
     handle: string | null;
     display_name: string | null;
