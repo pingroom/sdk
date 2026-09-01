@@ -516,6 +516,25 @@ export interface WaitApprovalInput {
 // a Question generalizes it to 2–4 options and/or a short typed answer, with a
 // responder scope and a mandatory-but-defaulted expiry. First valid answer wins.
 
+/**
+ * The authenticated human who answered a Question or handoff (never
+ * caller-supplied).
+ *
+ * Every field is redacted to `null` together when the caller is not entitled to
+ * see who answered, which is why `id` is nullable even on a decided question.
+ * The server sends all five fields from both `QuestionPresenter::responder` and
+ * the handoff presenter; the type previously declared only `id` and
+ * `display_name`, and being a closed object type that made the avatar fields
+ * unreachable without a cast.
+ */
+export interface QuestionResponder {
+  id: string | null;
+  display_name: string | null;
+  profile_image_url: string | null;
+  emoji: string | null;
+  color: string | null;
+}
+
 /** The lifecycle states of a Question. Terminal states are immutable. */
 export type QuestionState = 'pending' | 'answered' | 'expired' | 'cancelled';
 
@@ -590,7 +609,7 @@ export interface QuestionAnswer {
    * caller is not entitled to see who answered, so `id` is nullable even here.
    * Matches `HandoffAnswer.responder`.
    */
-  responder: { id: string | null; display_name: string | null } | null;
+  responder: QuestionResponder | null;
   answered_at: string | null;
 }
 
@@ -707,7 +726,7 @@ export interface HandoffAnswer {
   /** The typed answer, when the question invited one. */
   text: string | null;
   /** The authenticated human who answered. */
-  responder: { id: string | null; display_name: string | null } | null;
+  responder: QuestionResponder | null;
   answered_at: string | null;
 }
 
