@@ -187,6 +187,10 @@ export interface JoinRoomInput {
 }
 
 export interface UpdateQuickActionInput {
+  /**
+   * The Ping's title. Must be sent, but may be `''` — a Ping can be named by
+   * its emoji alone, and the app renders an untitled one as just the emoji.
+   */
   label: string;
   icon: string;
   sound?: string | null;

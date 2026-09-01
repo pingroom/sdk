@@ -79,6 +79,36 @@ test('actions.update forwards and returns the acknowledgement policy', async () 
   });
 });
 
+test('actions.update sends an emoji-only Ping with an empty label', async () => {
+  // A Ping's title is optional — the emoji can be the whole name — so `''` is
+  // a deliberate value the SDK must forward, not a missing field it rejects.
+  const { calls, fetchMock } = recorder({
+    'PUT /api/agent/rooms/ab12/actions/1': ({ init }) => ({
+      body: { id: 'qa1', action_number: 1, ...JSON.parse(init.body) },
+    }),
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  const action = await pr.actions.update('ab12', 1, { label: '', icon: '🔥' });
+
+  assert.equal(action.label, '');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { label: '', icon: '🔥' });
+});
+
+test('actions.update still refuses a missing label or a blank icon', async () => {
+  const { fetchMock } = recorder({});
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+
+  // Both guards run before the request, so they throw synchronously.
+  assert.throws(
+    () => pr.actions.update('ab12', 1, { icon: '🔥' }),
+    /`label` must be a string/,
+  );
+  assert.throws(
+    () => pr.actions.update('ab12', 1, { label: 'Hi', icon: '  ' }),
+    /`icon` is required/,
+  );
+});
+
 test('broadcast posts the ping body to the right path', async () => {
   const { calls, fetchMock } = recorder({
     'POST /api/agent/rooms/ab12/notifications': () => ({

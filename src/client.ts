@@ -8,6 +8,7 @@ import {
   MAX_PING_TITLE_LENGTH,
   MAX_PUBLIC_PING_MESSAGE_LENGTH,
   requireNonEmpty,
+  requirePresentString,
 } from './internal/guards.js';
 import type { LiveStatusPing, LiveStatusResult, LiveStatusSnapshot } from './liveStatus.js';
 import { McpClient } from './mcp.js';
@@ -425,7 +426,9 @@ class ActionsApi {
 
   update(inviteCode: string, actionNumber: number, input: UpdateQuickActionInput): Promise<QuickAction> {
     assertActionNumber(actionNumber);
-    requireNonEmpty(input.label, 'label');
+    // A Ping's title is optional — its emoji can be the whole name — so an
+    // empty `label` is a valid update. `icon` is the half that must be there.
+    requirePresentString(input.label, 'label');
     requireNonEmpty(input.icon, 'icon');
     return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/actions/${actionNumber}`, {
       body: dropUndefined({ ...input }),

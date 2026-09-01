@@ -65,3 +65,14 @@ export function requireNonEmpty(value: unknown, field: string): void {
     throw new PingRoomError(`\`${field}\` is required.`, { code: 'invalid_request' });
   }
 }
+
+/**
+ * The field must be sent, but may be empty — the server rule is `present`,
+ * not `required`. A quick action's `label` is the case: a Ping can be named by
+ * its emoji alone, so `''` is a deliberate value rather than a missing one.
+ */
+export function requirePresentString(value: unknown, field: string): void {
+  if (typeof value !== 'string') {
+    throw new PingRoomError(`\`${field}\` must be a string.`, { code: 'invalid_request' });
+  }
+}
