@@ -869,8 +869,12 @@ class InboxApi {
 class ProfileApi {
   constructor(private readonly http: HttpClient) {}
 
-  /** Set the agent's avatar (from the bot avatar set). */
-  setAvatar(avatarId: string): Promise<unknown> {
+  /**
+   * Set this agent's own avatar (from the bot avatar set) — the robot face
+   * its pings and Questions wear. Never touches the bound human's profile
+   * picture. Returns `{ ok, avatar_id, avatar_url }`.
+   */
+  setAvatar(avatarId: string): Promise<{ ok: boolean; avatar_id: string; avatar_url: string }> {
     requireNonEmpty(avatarId, 'avatarId');
     return this.http.request('POST', '/api/agent/profile/avatar', { body: { avatar_id: avatarId } });
   }

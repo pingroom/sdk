@@ -419,6 +419,17 @@ interface AgentNotificationFields {
   created_at: string;
   room?: { code: string; name: string; icon: string | null; color: string | null };
   sender?: { id: string; name: string | null };
+  /**
+   * Present when a connected agent (MCP / CLI credential) originated the
+   * ping: the agent registration's display identity. Null/absent on human,
+   * webhook, and trigger rows.
+   */
+  origin_agent?: {
+    id?: string;
+    handle: string | null;
+    display_name: string | null;
+    avatar_url?: string | null;
+  } | null;
 }
 
 export interface AgentNotification extends AgentNotificationFields {
