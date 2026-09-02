@@ -106,7 +106,8 @@ legacy or malformed data.
 
 ## Authentication
 
-For local tools, pair through the PingRoom app. No copied token or room code:
+Pair local tools in a browser or the PingRoom app without copying a token or
+room code:
 
 ```ts
 const pr = new PingRoom();
@@ -116,7 +117,9 @@ const pairing = await pr.auth.startPairing({
   scopes: ['pingroom:rooms:read', 'pingroom:broadcast:send', 'pingroom:handoffs:create'],
 });
 
-console.log(`Open in PingRoom: ${pairing.pair_url}`);
+console.log(`Open to approve: ${pairing.pair_url}`);
+// QR renderers should encode the native app link when the server supplies it.
+const qrUrl = pairing.pair_qr_url ?? pairing.pair_url;
 const active = await pr.auth.waitForPairing(pairing);
 
 // The client now uses the active credential. `active.room` is the delivery
@@ -130,6 +133,10 @@ if (active.room) {
   if (room) await pr.broadcast(room.invite_code, { message: 'SDK connected ✅' });
 }
 ```
+
+`pair_url` opens the API-hosted approval page, where users can sign in or scan
+the app QR. `pair_qr_url` is the app universal link to encode in QR codes.
+Falling back to `pair_url` supports older servers.
 
 The grant also comes back as `active.room_access` (`'all'` | `'selected'`) and
 `active.rooms` (`{ id, invite_code, name }[]`, empty under `'all'`).

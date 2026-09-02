@@ -393,7 +393,8 @@ test('auth.startPairing registers anonymously, then creates an app pairing with 
       status: 201,
       body: {
         pair_token: 'pair_123',
-        pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+        pair_url: 'https://api.pingroom.io/pair?token=pair_123',
+        pair_qr_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
         expires_in: 900,
         poll_interval_ms: 1500,
       },
@@ -404,6 +405,8 @@ test('auth.startPairing registers anonymously, then creates an app pairing with 
   const pairing = await pr.auth.startPairing({ agent_label: 'Deploy bot', scopes });
 
   assert.equal(pairing.pair_token, 'pair_123');
+  assert.equal(pairing.pair_url, 'https://api.pingroom.io/pair?token=pair_123');
+  assert.equal(pairing.pair_qr_url, 'https://pingroom.io/app/agents/pair?token=pair_123');
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     type: 'anonymous',
     scopes,

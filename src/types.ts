@@ -119,10 +119,13 @@ export interface StartPairingParams {
   agent_label?: string;
 }
 
-/** Short-lived app link returned when a pairing session starts. */
+/** Short-lived browser and native-app links returned when pairing starts. */
 export interface PairingStart {
   pair_token: string;
+  /** Canonical browser approval page hosted by the PingRoom API. */
   pair_url: string;
+  /** Native app universal link for QR renderers. Falls back to `pair_url` on older servers. */
+  pair_qr_url?: string;
   expires_in: number;
   poll_interval_ms: number;
 }
