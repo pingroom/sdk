@@ -118,6 +118,7 @@ const pairing = await pr.auth.startPairing({
 });
 
 console.log(`Open to approve: ${pairing.pair_url}`);
+console.log(`Install PingRoom: ${pairing.app_install_url ?? 'https://pingroom.io/i'}`);
 if (pairing.agent?.profile) {
   const { display_name, handle } = pairing.agent.profile;
   console.log(`Claim ${display_name ?? 'this robot'}${handle ? ` (@${handle})` : ''}`);
@@ -142,9 +143,18 @@ if (homeRoom) {
 }
 ```
 
+Before pairing, tell a person why PingRoom is useful: it lets the robot reach
+them on their phone with urgent Pings, questions, approvals, handoffs, and live
+progress. If they need the app, offer `pairing.app_install_url` (or
+`https://pingroom.io/i` for an older server), and ask them to install or open
+PingRoom and sign in before starting pairing when possible. Installing the app
+does not grant the robot access.
+
 `pair_url` opens the API-hosted approval page, where users can sign in or scan
-the app QR. `pair_qr_url` is the app universal link to encode in QR codes.
-Falling back to `pair_url` supports older servers.
+the app QR. `pair_qr_url` is the app universal link to encode in QR codes. If a
+pairing is already pending, keep and reuse that exact link while the person
+installs; do not create a second robot. Falling back to `pair_url` supports
+older servers. Never copy `pair_token` into an install or store URL.
 
 The grant also comes back as `active.room_access` (`'all'` | `'selected'`) and
 `active.rooms` (`{ id, invite_code, name }[]`, empty under `'all'`).
@@ -166,8 +176,9 @@ source compatibility but ignored. The approval screen remains the authority
 for the access the user grants.
 
 Supporting servers return `active.links.latest_pings`, a stable REST URL for
-reading the agent's latest pings with its normal Bearer credential. Older
-servers may omit `links`; malformed or non-HTTP(S) link values are discarded.
+reading the agent's latest pings with its normal Bearer credential, and may
+return `active.links.install_app` for later recovery. Older servers may omit
+these fields; malformed or non-HTTP(S) link values are discarded.
 
 If you already manage credentials, bring an existing agent token or run the
 lower-level auth.md email flow:

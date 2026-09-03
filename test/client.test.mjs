@@ -463,6 +463,7 @@ test('auth.startPairing leaves the full grant to the server, even for legacy sco
         pair_token: 'pair_123',
         pair_url: 'https://api.pingroom.io/pair?token=pair_123',
         pair_qr_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+        app_install_url: 'https://pingroom.io/i',
         expires_in: 900,
         poll_interval_ms: 1500,
       },
@@ -475,6 +476,7 @@ test('auth.startPairing leaves the full grant to the server, even for legacy sco
   assert.equal(pairing.pair_token, 'pair_123');
   assert.equal(pairing.pair_url, 'https://api.pingroom.io/pair?token=pair_123');
   assert.equal(pairing.pair_qr_url, 'https://pingroom.io/app/agents/pair?token=pair_123');
+  assert.equal(pairing.app_install_url, 'https://pingroom.io/i');
   assert.equal(pairing.flow_version, 2);
   assert.equal(pairing.claim_mode, 'agent_identity');
   assert.equal(pairing.agent.profile.handle, 'agt_deploy');
@@ -597,6 +599,7 @@ test('auth.waitForPairing adopts the approved credential and selected room', asy
           },
           links: {
             latest_pings: 'https://api.pingroom.io/api/agent/notifications?limit=25&page=1',
+            install_app: 'https://pingroom.io/i',
           },
         },
       };
@@ -618,6 +621,7 @@ test('auth.waitForPairing adopts the approved credential and selected room', asy
   assert.equal(Object.hasOwn(active, 'scopes'), false);
   assert.deepEqual(active.links, {
     latest_pings: 'https://api.pingroom.io/api/agent/notifications?limit=25&page=1',
+    install_app: 'https://pingroom.io/i',
   });
   assert.equal(pr.getToken(), 'active_token');
   assert.equal(calls.at(-1).init.headers['Authorization'], 'Bearer active_token');
@@ -725,6 +729,36 @@ test('auth.waitForPairing tolerates old servers and drops malformed latest-pings
     assert.equal(active.links, undefined);
     assert.equal(pr.getToken(), 'active_token');
   }
+});
+
+test('auth.waitForPairing drops an unsafe install link without losing latest pings', async () => {
+  const { fetchMock } = recorder({
+    'GET /api/agent/auth/pair/status': () => ({
+      body: {
+        status: 'active',
+        credential: 'active_token',
+        credential_type: 'active',
+        expires_in: 0,
+        room: null,
+        links: {
+          latest_pings: 'https://api.pingroom.io/api/agent/notifications?limit=25&page=1',
+          install_app: 'javascript:alert(1)',
+        },
+      },
+    }),
+  });
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+  const active = await pr.auth.waitForPairing({
+    pair_token: 'pair_123',
+    pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+    expires_in: 10,
+    poll_interval_ms: 1000,
+  });
+
+  assert.deepEqual(active.links, {
+    latest_pings: 'https://api.pingroom.io/api/agent/notifications?limit=25&page=1',
+  });
 });
 
 test('auth.waitForPairing accepts a server-owned grant without scope metadata', async () => {

@@ -123,10 +123,8 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
-/** Drop malformed or unsafe server-provided links without rejecting a valid credential. */
-function normalizePairingLinks(value: unknown): { latest_pings: string } | undefined {
-  if (!isRecord(value)) return undefined;
-  const candidate = value['latest_pings'];
+/** Drop a malformed or unsafe server-provided URL without rejecting its response. */
+function normalizePublicHttpUrl(candidate: unknown): string | undefined {
   if (typeof candidate !== 'string' || candidate.trim() === '') return undefined;
   const trimmed = candidate.trim();
   // eslint-disable-next-line no-control-regex
@@ -138,7 +136,19 @@ function normalizePairingLinks(value: unknown): { latest_pings: string } | undef
   } catch {
     return undefined;
   }
-  return { latest_pings: trimmed };
+  return trimmed;
+}
+
+/** Drop malformed or unsafe server-provided links without rejecting a valid credential. */
+function normalizePairingLinks(value: unknown): { latest_pings: string; install_app?: string } | undefined {
+  if (!isRecord(value)) return undefined;
+  const latestPings = normalizePublicHttpUrl(value['latest_pings']);
+  if (!latestPings) return undefined;
+  const installApp = normalizePublicHttpUrl(value['install_app']);
+  return {
+    latest_pings: latestPings,
+    ...(installApp ? { install_app: installApp } : {}),
+  };
 }
 
 function invalidInboxResponse(message: string, body: Record<string, unknown> = {}): never {

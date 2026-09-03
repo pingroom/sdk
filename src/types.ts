@@ -93,6 +93,8 @@ export interface AgentDeliveryRoom {
 export interface AgentCredentialLinks {
   /** REST endpoint for the agent's latest visible pings. Authenticate normally. */
   latest_pings: string;
+  /** Token-free smart link for installing PingRoom on iOS or Android. */
+  install_app?: string;
 }
 
 /** Public robot identity provisioned before a person approves pairing. */
@@ -179,6 +181,8 @@ export interface PairingStart extends PairingIdentityMetadata {
   pair_url: string;
   /** Native app universal link for QR renderers. Falls back to `pair_url` on older servers. */
   pair_qr_url?: string;
+  /** Token-free smart install link. Never append `pair_token` to it. */
+  app_install_url?: string;
   expires_in: number;
   poll_interval_ms: number;
 }
