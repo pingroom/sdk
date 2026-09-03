@@ -107,7 +107,8 @@ legacy or malformed data.
 ## Authentication
 
 Pair local tools in a browser or the PingRoom app without copying a token or
-room code:
+room code. Pairing provisions a separate PingRoom robot first; the person who
+opens the link claims that robot and delegates its room access:
 
 ```ts
 const pr = new PingRoom();
@@ -117,17 +118,23 @@ const pairing = await pr.auth.startPairing({
 });
 
 console.log(`Open to approve: ${pairing.pair_url}`);
+if (pairing.agent?.profile) {
+  const { display_name, handle } = pairing.agent.profile;
+  console.log(`Claim ${display_name ?? 'this robot'}${handle ? ` (@${handle})` : ''}`);
+}
 // QR renderers should encode the native app link when the server supplies it.
 const qrUrl = pairing.pair_qr_url ?? pairing.pair_url;
 const active = await pr.auth.waitForPairing(pairing);
 console.log(`Latest pings: ${active.links?.latest_pings ?? 'not supplied by this server'}`);
 
-// The client now uses the active credential. `active.room` is the delivery
-// room the approver picked, or the server chose deterministically for an
-// all-rooms grant. It is null only when no eligible private room exists (and on
-// older servers), so still check before using it.
-if (active.room) {
-  await pr.broadcast(active.room.invite_code, { message: 'SDK connected ✅' });
+// The client now uses the robot's active credential. `active.home_room` is the
+// additive v2 name for the same delivery room exposed as legacy `active.room`.
+// It is the room the approver picked, or the server chose deterministically for
+// an all-rooms grant. It is null only when no eligible private room exists (and
+// on older servers), so keep the legacy fallback and still check before use.
+const homeRoom = active.home_room ?? active.room;
+if (homeRoom) {
+  await pr.broadcast(homeRoom.invite_code, { message: 'SDK connected ✅' });
 } else {
   // No eligible private delivery room exists yet. List or create one.
   const [room] = await pr.rooms.list();
@@ -141,6 +148,14 @@ Falling back to `pair_url` supports older servers.
 
 The grant also comes back as `active.room_access` (`'all'` | `'selected'`) and
 `active.rooms` (`{ id, invite_code, name }[]`, empty under `'all'`).
+
+Supporting servers mark this contract with `flow_version: 2` and
+`claim_mode: 'agent_identity'`. `pairing.agent.profile` identifies the robot
+before approval. After approval, `active.owner` names the person who claimed it,
+while `active.home_room` and `active.room_membership` describe where the robot
+joined. These fields are additive and optional in the TypeScript surface, so
+the same code continues to work against older servers. The robot is the acting
+principal; it does not impersonate the owner's personal PingRoom profile.
 
 `waitForPairing()` tolerates short network outages and stops when the app link
 expires. Pass an `AbortSignal` when your process needs its own cancellation.

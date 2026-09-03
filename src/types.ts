@@ -95,7 +95,47 @@ export interface AgentCredentialLinks {
   latest_pings: string;
 }
 
-export interface Credential {
+/** Public robot identity provisioned before a person approves pairing. */
+export interface AgentProfile {
+  display_name: string | null;
+  handle: string | null;
+  avatar_id: string | null;
+  avatar_url: string | null;
+}
+
+/** Agent wrapper used by pairing v2. Older servers omit it entirely. */
+export interface PairingAgent {
+  id?: string;
+  label?: string | null;
+  handle?: string | null;
+  profile?: AgentProfile;
+}
+
+/** Human who claimed the robot. Present only after approval. */
+export interface PairingOwner {
+  name: string | null;
+}
+
+/** Visible home-room membership, distinct from the wider room-access grant. */
+export interface AgentRoomMembership {
+  status: 'active' | 'removed';
+  joined_at: string | null;
+  removed_at: string | null;
+  room: AgentDeliveryRoom | null;
+}
+
+/** Additive pairing-v2 identity metadata; every field is optional for old servers. */
+export interface PairingIdentityMetadata {
+  flow_version?: 2;
+  claim_mode?: 'agent_identity';
+  agent?: PairingAgent;
+  owner?: PairingOwner;
+  /** Alias of legacy `room`: the robot's Question/Handoff delivery room. */
+  home_room?: AgentDeliveryRoom | null;
+  room_membership?: AgentRoomMembership | null;
+}
+
+export interface Credential extends PairingIdentityMetadata {
   credential: string;
   credential_type: 'pre_claim' | 'active';
   expires_in: number | null;
@@ -133,7 +173,7 @@ export interface StartPairingParams {
 }
 
 /** Short-lived browser and native-app links returned when pairing starts. */
-export interface PairingStart {
+export interface PairingStart extends PairingIdentityMetadata {
   pair_token: string;
   /** Canonical browser approval page hosted by the PingRoom API. */
   pair_url: string;
@@ -156,8 +196,8 @@ export type PairedCredential = Omit<Credential, 'credential_type' | 'scopes'> & 
 };
 
 export type PairingStatus =
-  | { status: 'pending' }
-  | { status: 'expired' }
+  | (PairingIdentityMetadata & { status: 'pending' })
+  | (PairingIdentityMetadata & { status: 'expired' })
   | (PairedCredential & {
       status: 'active';
       /** Legacy server metadata accepted on input and omitted from the result. */

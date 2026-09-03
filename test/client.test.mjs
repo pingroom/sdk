@@ -392,6 +392,19 @@ test('auth.startPairing leaves the full grant to the server, even for legacy sco
     'POST /api/agent/auth/pair/start': () => ({
       status: 201,
       body: {
+        flow_version: 2,
+        claim_mode: 'agent_identity',
+        agent: {
+          id: 'agent-1',
+          label: 'Deploy bot',
+          handle: 'agt_deploy',
+          profile: {
+            display_name: 'Deploy bot',
+            handle: 'agt_deploy',
+            avatar_id: 'bot-7',
+            avatar_url: 'https://api.pingroom.io/avatars/bot-7.png',
+          },
+        },
         pair_token: 'pair_123',
         pair_url: 'https://api.pingroom.io/pair?token=pair_123',
         pair_qr_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
@@ -407,6 +420,9 @@ test('auth.startPairing leaves the full grant to the server, even for legacy sco
   assert.equal(pairing.pair_token, 'pair_123');
   assert.equal(pairing.pair_url, 'https://api.pingroom.io/pair?token=pair_123');
   assert.equal(pairing.pair_qr_url, 'https://pingroom.io/app/agents/pair?token=pair_123');
+  assert.equal(pairing.flow_version, 2);
+  assert.equal(pairing.claim_mode, 'agent_identity');
+  assert.equal(pairing.agent.profile.handle, 'agt_deploy');
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     type: 'anonymous',
     agent_label: 'Deploy bot',
@@ -497,12 +513,33 @@ test('auth.waitForPairing adopts the approved credential and selected room', asy
       return {
         body: {
           status: 'active',
+          flow_version: 2,
+          claim_mode: 'agent_identity',
           credential: 'active_token',
           credential_type: 'active',
           expires_in: 0,
           scopes: ['pingroom:rooms:read'],
           handle: 'agt_deploy',
           room: { invite_code: 'AB12CD', name: 'Deployments' },
+          home_room: { invite_code: 'AB12CD', name: 'Deployments' },
+          owner: { name: 'Ada' },
+          agent: {
+            id: 'agent-1',
+            label: 'Deploy bot',
+            handle: 'agt_deploy',
+            profile: {
+              display_name: 'Deploy bot',
+              handle: 'agt_deploy',
+              avatar_id: 'bot-7',
+              avatar_url: 'https://api.pingroom.io/avatars/bot-7.png',
+            },
+          },
+          room_membership: {
+            status: 'active',
+            joined_at: '2026-09-03T08:00:00Z',
+            removed_at: null,
+            room: { invite_code: 'AB12CD', name: 'Deployments' },
+          },
           links: {
             latest_pings: 'https://api.pingroom.io/api/agent/notifications?limit=25&page=1',
           },
@@ -519,6 +556,10 @@ test('auth.waitForPairing adopts the approved credential and selected room', asy
 
   assert.equal(active.credential, 'active_token');
   assert.equal(active.room.invite_code, 'AB12CD');
+  assert.equal(active.home_room.invite_code, 'AB12CD');
+  assert.equal(active.agent.profile.display_name, 'Deploy bot');
+  assert.equal(active.owner.name, 'Ada');
+  assert.equal(active.room_membership.status, 'active');
   assert.equal(Object.hasOwn(active, 'scopes'), false);
   assert.deepEqual(active.links, {
     latest_pings: 'https://api.pingroom.io/api/agent/notifications?limit=25&page=1',
