@@ -377,7 +377,7 @@ test('setToken updates the bearer used on subsequent calls', async () => {
   assert.equal(calls[0].init.headers['Authorization'], 'Bearer tok2');
 });
 
-test('auth.startPairing registers anonymously, then creates an app pairing with the pending credential', async () => {
+test('auth.startPairing leaves the full grant to the server, even for legacy scope callers', async () => {
   const scopes = ['pingroom:rooms:read', 'pingroom:broadcast:send'];
   const { calls, fetchMock } = recorder({
     'POST /api/agent/auth': () => ({
@@ -409,11 +409,10 @@ test('auth.startPairing registers anonymously, then creates an app pairing with 
   assert.equal(pairing.pair_qr_url, 'https://pingroom.io/app/agents/pair?token=pair_123');
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     type: 'anonymous',
-    scopes,
     agent_label: 'Deploy bot',
   });
   assert.equal(calls[0].init.headers['Authorization'], undefined);
-  assert.deepEqual(JSON.parse(calls[1].init.body), { scopes });
+  assert.deepEqual(JSON.parse(calls[1].init.body), {});
   assert.equal(calls[1].init.headers['Authorization'], 'Bearer pending_token');
 });
 
@@ -442,7 +441,7 @@ test('auth.startPairing restores an existing credential when pair creation fails
   assert.equal(pr.getToken(), 'existing_active');
 });
 
-test('auth.startPairing defaults to room-read, broadcast, and Agent Inbox/Handoff scopes', async () => {
+test('auth.startPairing sends no client scope contract when scopes are omitted', async () => {
   const { calls, fetchMock } = recorder({
     'POST /api/agent/auth': () => ({
       status: 201,
@@ -467,9 +466,8 @@ test('auth.startPairing defaults to room-read, broadcast, and Agent Inbox/Handof
 
   await pr.auth.startPairing();
 
-  const expected = ['pingroom:rooms:read', 'pingroom:broadcast:send', 'pingroom:handoffs:create'];
-  assert.deepEqual(JSON.parse(calls[0].init.body).scopes, expected);
-  assert.deepEqual(JSON.parse(calls[1].init.body).scopes, expected);
+  assert.deepEqual(JSON.parse(calls[0].init.body), { type: 'anonymous' });
+  assert.deepEqual(JSON.parse(calls[1].init.body), {});
 });
 
 test('auth.waitForPairing adopts the approved credential and selected room', async () => {
@@ -505,6 +503,9 @@ test('auth.waitForPairing adopts the approved credential and selected room', asy
           scopes: ['pingroom:rooms:read'],
           handle: 'agt_deploy',
           room: { invite_code: 'AB12CD', name: 'Deployments' },
+          links: {
+            latest_pings: 'https://api.pingroom.io/api/agent/notifications?limit=25&page=1',
+          },
         },
       };
     },
@@ -518,14 +519,17 @@ test('auth.waitForPairing adopts the approved credential and selected room', asy
 
   assert.equal(active.credential, 'active_token');
   assert.equal(active.room.invite_code, 'AB12CD');
+  assert.equal(Object.hasOwn(active, 'scopes'), false);
+  assert.deepEqual(active.links, {
+    latest_pings: 'https://api.pingroom.io/api/agent/notifications?limit=25&page=1',
+  });
   assert.equal(pr.getToken(), 'active_token');
   assert.equal(calls.at(-1).init.headers['Authorization'], 'Bearer active_token');
 });
 
-test('auth.waitForPairing adopts an all-rooms grant that pins no delivery room', async () => {
-  // `room_access: "all"` is the MOST permissive answer the human can give, and
-  // the server sends `room: null` for it because no single destination was
-  // pinned. Treating that as a broken response threw away a working credential.
+test('auth.waitForPairing tolerates an all-rooms grant with no eligible delivery room', async () => {
+  // New servers choose an eligible private room when possible, but null remains
+  // valid for accounts without one and for old server responses.
   const { calls, fetchMock } = recorder({
     'GET /api/agent/auth/pair/status': () => ({
       body: {
@@ -587,6 +591,71 @@ test('auth.waitForPairing accepts an omitted room and carries the selected grant
   });
 
   assert.equal(active.room, undefined);
+  assert.equal(pr.getToken(), 'active_token');
+});
+
+test('auth.waitForPairing tolerates old servers and drops malformed latest-pings links', async () => {
+  const malformed = [
+    undefined,
+    {},
+    { latest_pings: '' },
+    { latest_pings: '/api/agent/notifications' },
+    { latest_pings: 'javascript:alert(1)' },
+    { latest_pings: 'https://secret@api.pingroom.io/pings' },
+    { latest_pings: 'https://api.pingroom.io/pings\u001b[2J' },
+  ];
+
+  for (const links of malformed) {
+    const body = {
+      status: 'active',
+      credential: 'active_token',
+      credential_type: 'active',
+      expires_in: 0,
+      scopes: ['pingroom:rooms:read'],
+      room: null,
+      ...(links === undefined ? {} : { links }),
+    };
+    const { fetchMock } = recorder({
+      'GET /api/agent/auth/pair/status': () => ({ body }),
+    });
+    const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+    const active = await pr.auth.waitForPairing({
+      pair_token: 'pair_123',
+      pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+      expires_in: 10,
+      poll_interval_ms: 1000,
+    });
+
+    assert.equal(active.links, undefined);
+    assert.equal(pr.getToken(), 'active_token');
+  }
+});
+
+test('auth.waitForPairing accepts a server-owned grant without scope metadata', async () => {
+  const { fetchMock } = recorder({
+    'GET /api/agent/auth/pair/status': () => ({
+      body: {
+        status: 'active',
+        credential: 'active_token',
+        credential_type: 'active',
+        expires_in: 0,
+        room: null,
+        room_access: 'all',
+        rooms: [],
+      },
+    }),
+  });
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+
+  const active = await pr.auth.waitForPairing({
+    pair_token: 'pair_123',
+    pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+    expires_in: 10,
+    poll_interval_ms: 1000,
+  });
+
+  assert.equal(active.credential, 'active_token');
+  assert.equal(Object.hasOwn(active, 'scopes'), false);
   assert.equal(pr.getToken(), 'active_token');
 });
 

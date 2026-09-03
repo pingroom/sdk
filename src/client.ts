@@ -71,11 +71,6 @@ import type {
 } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.pingroom.io';
-const DEFAULT_PAIRING_SCOPES = [
-  'pingroom:rooms:read',
-  'pingroom:broadcast:send',
-  'pingroom:handoffs:create',
-] as const;
 /** Extra wall-clock allowance over the server's hold window for long-poll calls. */
 const LONG_POLL_BUFFER_MS = 10_000;
 const DEFAULT_WAIT_SECONDS = 20;
@@ -125,6 +120,24 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
+}
+
+/** Drop malformed or unsafe server-provided links without rejecting a valid credential. */
+function normalizePairingLinks(value: unknown): { latest_pings: string } | undefined {
+  if (!isRecord(value)) return undefined;
+  const candidate = value['latest_pings'];
+  if (typeof candidate !== 'string' || candidate.trim() === '') return undefined;
+  const trimmed = candidate.trim();
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001F\u007F-\u009F]/.test(trimmed)) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined;
+    if (url.username !== '' || url.password !== '') return undefined;
+  } catch {
+    return undefined;
+  }
+  return { latest_pings: trimmed };
 }
 
 function invalidInboxResponse(message: string, body: Record<string, unknown> = {}): never {
@@ -259,23 +272,21 @@ class AuthApi {
 
   /**
    * Register a pending agent and create a short-lived link that opens the
-   * PingRoom app. The person approving it chooses the delivery room and sees
-   * the exact requested scopes. The pending credential stays private inside
-   * this client and is replaced automatically once waitForPairing() succeeds.
+   * PingRoom app. The server owns the full grant shown to the approver; this
+   * client sends no scope list. The pending credential stays private inside the
+   * client and is replaced automatically once waitForPairing() succeeds.
    */
   async startPairing(params: StartPairingParams = {}): Promise<PairingStart> {
-    const scopes = params.scopes ?? [...DEFAULT_PAIRING_SCOPES];
     const previousToken = this.http.getToken();
     const pending = await this.register({
       type: 'anonymous',
-      scopes,
       ...(params.agent_label ? { agent_label: params.agent_label } : {}),
     });
     this.http.setToken(pending.credential);
 
     try {
       return await this.http.request('POST', '/api/agent/auth/pair/start', {
-        body: { scopes },
+        body: {},
       });
     } catch (error) {
       if (this.http.getToken() === pending.credential) {
@@ -319,17 +330,13 @@ class AuthApi {
             typeof status.credential !== 'string'
             || status.credential.trim() === ''
             || status.credential_type !== 'active'
-            || !Array.isArray(status.scopes)
-            || status.scopes.some((scope) => typeof scope !== 'string' || scope.trim() === '')
             || (status.expires_in !== null
               && (typeof status.expires_in !== 'number'
                 || !Number.isFinite(status.expires_in)
                 || status.expires_in < 0))
-            // A null/absent `room` is VALID: under `room_access: 'all'` the
-            // human granted every room and pinned no single delivery room, so
-            // the server sends `room: null`. Rejecting that threw away a good
-            // credential on the most permissive grant. Only a room that is
-            // PRESENT but malformed is a broken response.
+            // A null/absent `room` is valid when the account has no eligible
+            // private delivery room (and on older servers). Only a room that is
+            // present but malformed is a broken response.
             || (status.room != null
               && (typeof status.room.invite_code !== 'string'
                 || status.room.invite_code.trim() === ''))
@@ -340,8 +347,12 @@ class AuthApi {
             });
           }
           this.http.setToken(status.credential);
-          const { status: _status, ...credential } = status;
-          return credential;
+          // Pairing is server-authoritative. Some servers still include their
+          // internal grant marker for protocol compatibility; it is neither a
+          // client input nor part of the paired credential surface.
+          const { status: _status, scopes: _serverScopes, links: rawLinks, ...credential } = status;
+          const links = normalizePairingLinks(rawLinks);
+          return links ? { ...credential, links } : credential;
         }
         if (status.status === 'expired') {
           throw new PingRoomError('The PingRoom pairing link expired before it was approved.', {

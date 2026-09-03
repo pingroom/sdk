@@ -114,21 +114,22 @@ const pr = new PingRoom();
 
 const pairing = await pr.auth.startPairing({
   agent_label: 'Deploy bot',
-  scopes: ['pingroom:rooms:read', 'pingroom:broadcast:send', 'pingroom:handoffs:create'],
 });
 
 console.log(`Open to approve: ${pairing.pair_url}`);
 // QR renderers should encode the native app link when the server supplies it.
 const qrUrl = pairing.pair_qr_url ?? pairing.pair_url;
 const active = await pr.auth.waitForPairing(pairing);
+console.log(`Latest pings: ${active.links?.latest_pings ?? 'not supplied by this server'}`);
 
 // The client now uses the active credential. `active.room` is the delivery
-// room the approver picked — and it is NULL when they granted `all` rooms,
-// which pins no single destination. Read `room_access` before assuming one.
+// room the approver picked, or the server chose deterministically for an
+// all-rooms grant. It is null only when no eligible private room exists (and on
+// older servers), so still check before using it.
 if (active.room) {
   await pr.broadcast(active.room.invite_code, { message: 'SDK connected ✅' });
 } else {
-  // room_access === 'all' — every room the account is in. List and choose.
+  // No eligible private delivery room exists yet. List or create one.
   const [room] = await pr.rooms.list();
   if (room) await pr.broadcast(room.invite_code, { message: 'SDK connected ✅' });
 }
@@ -143,9 +144,15 @@ The grant also comes back as `active.room_access` (`'all'` | `'selected'`) and
 
 `waitForPairing()` tolerates short network outages and stops when the app link
 expires. Pass an `AbortSignal` when your process needs its own cancellation.
-If `scopes` is omitted, pairing requests room lookup, broadcast access, and
-`pingroom:handoffs:create` for private Handoffs and Agent Inbox activation. The
-approval screen shows every grant before the user connects.
+Pairing grants are server-authoritative. `startPairing()` sends no scope array,
+so an older installed SDK cannot accidentally mint a partial credential when
+the service adds a capability. The deprecated `scopes` option is accepted for
+source compatibility but ignored. The approval screen remains the authority
+for the access the user grants.
+
+Supporting servers return `active.links.latest_pings`, a stable REST URL for
+reading the agent's latest pings with its normal Bearer credential. Older
+servers may omit `links`; malformed or non-HTTP(S) link values are discarded.
 
 If you already manage credentials, bring an existing agent token or run the
 lower-level auth.md email flow:

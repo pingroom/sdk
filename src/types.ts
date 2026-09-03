@@ -14,6 +14,7 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
 /** The scopes an agent credential can hold. */
 export type AgentScope =
+  | 'pingroom:full'
   | 'pingroom:rooms:read'
   | 'pingroom:rooms:write'
   | 'pingroom:rooms:publish'
@@ -69,8 +70,9 @@ export interface RegisterParams {
 /**
  * How wide the human made this agent's room grant.
  *
- * `'all'` — every room the account is in; the grant lists none, and no single
- * delivery room is pinned. `'selected'` — exactly the rooms in `rooms`.
+ * `'all'` — every room the account is in; the grant lists none, while `room`
+ * may identify one eligible private delivery destination. `'selected'` —
+ * exactly the rooms in `rooms`.
  */
 export type AgentRoomAccess = 'all' | 'selected';
 
@@ -87,6 +89,12 @@ export interface AgentDeliveryRoom {
   name?: string | null;
 }
 
+/** Stable, non-credential URLs returned with an approved agent connection. */
+export interface AgentCredentialLinks {
+  /** REST endpoint for the agent's latest visible pings. Authenticate normally. */
+  latest_pings: string;
+}
+
 export interface Credential {
   credential: string;
   credential_type: 'pre_claim' | 'active';
@@ -100,6 +108,8 @@ export interface Credential {
   room_access?: AgentRoomAccess | null;
   /** The full grant. Empty under `room_access: 'all'`. */
   rooms?: AgentAccessRoom[];
+  /** Server-authoritative endpoints associated with this connection. */
+  links?: AgentCredentialLinks;
 }
 
 export interface ClaimStartParams {
@@ -114,7 +124,10 @@ export interface ClaimCompleteParams {
 
 /** Start an app-approved pairing without copying an API token or room code. */
 export interface StartPairingParams {
-  /** Defaults to room lookup, broadcast, and private Handoff/Inbox activation. */
+  /**
+   * @deprecated Pairing grants are server-authoritative. This value is ignored
+   * and retained only so existing TypeScript callers continue to compile.
+   */
   scopes?: ScopeInput[];
   agent_label?: string;
 }
@@ -130,23 +143,26 @@ export interface PairingStart {
   poll_interval_ms: number;
 }
 
-export interface PairedCredential extends Credential {
+export type PairedCredential = Omit<Credential, 'credential_type' | 'scopes'> & {
   credential_type: 'active';
   /**
-   * The delivery room the human picked, or NULL when they granted `all` rooms
-   * and so pinned no single destination. Null is a valid, fully usable
-   * credential — check `room_access` before assuming a room exists.
+   * The selected/deterministic private delivery room. Null remains valid when
+   * the account has no eligible private room (and for older servers).
    */
   room: AgentDeliveryRoom | null;
   room_access: AgentRoomAccess;
   /** The full grant. Empty under `room_access: 'all'`. */
   rooms: AgentAccessRoom[];
-}
+};
 
 export type PairingStatus =
   | { status: 'pending' }
   | { status: 'expired' }
-  | (PairedCredential & { status: 'active' });
+  | (PairedCredential & {
+      status: 'active';
+      /** Legacy server metadata accepted on input and omitted from the result. */
+      scopes?: string[];
+    });
 
 export interface WaitForPairingOptions {
   /** Stop waiting without consuming the pairing session. */
