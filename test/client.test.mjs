@@ -79,6 +79,61 @@ test('actions.update forwards and returns the acknowledgement policy', async () 
   });
 });
 
+test('actions.updateMany writes every slot in a single request', async () => {
+  const { calls, fetchMock } = recorder({
+    'PUT /api/agent/rooms/ab12/actions': ({ init }) => ({
+      body: JSON.parse(init.body).actions,
+    }),
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  const actions = await pr.actions.updateMany('ab12', [
+    { action_number: 1, label: 'Deployed', icon: '✅' },
+    { action_number: 2, label: '', icon: '🔥' },
+  ]);
+
+  // One request, not one per slot — the whole point of the method.
+  assert.equal(calls.length, 1);
+  assert.equal(actions.length, 2);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    actions: [
+      { action_number: 1, label: 'Deployed', icon: '✅' },
+      { action_number: 2, label: '', icon: '🔥' },
+    ],
+  });
+});
+
+test('actions.updateMany rejects a malformed batch before spending a request', async () => {
+  const { calls, fetchMock } = recorder({});
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+
+  // An empty array is a caller bug, not a way to clear a room's Pings.
+  assert.throws(() => pr.actions.updateMany('ab12', []), /at least one action/);
+  assert.throws(
+    () => pr.actions.updateMany('ab12', [
+      { action_number: 1, label: 'a', icon: '1' },
+      { action_number: 2, label: 'b', icon: '2' },
+      { action_number: 3, label: 'c', icon: '3' },
+      { action_number: 4, label: 'd', icon: '4' },
+      { action_number: 1, label: 'e', icon: '5' },
+    ]),
+    /only 4 action slots/,
+  );
+  // Two entries for one slot: the last would silently win server-side.
+  assert.throws(
+    () => pr.actions.updateMany('ab12', [
+      { action_number: 2, label: 'a', icon: '1' },
+      { action_number: 2, label: 'b', icon: '2' },
+    ]),
+    /Duplicate action_number 2/,
+  );
+  assert.throws(
+    () => pr.actions.updateMany('ab12', [{ action_number: 1, label: 'a', icon: '' }]),
+    /`icon` is required/,
+  );
+
+  assert.equal(calls.length, 0);
+});
+
 test('actions.update sends an emoji-only Ping with an empty label', async () => {
   // A Ping's title is optional — the emoji can be the whole name — so `''` is
   // a deliberate value the SDK must forward, not a missing field it rejects.

@@ -59,6 +59,7 @@ import type {
   RotateHandleResult,
   StartPairingParams,
   TriggerInput,
+  QuickActionInput,
   UpdateQuickActionInput,
   UploadAttachmentInput,
   WaitApprovalInput,
@@ -443,6 +444,52 @@ class ActionsApi {
     requireNonEmpty(input.icon, 'icon');
     return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/actions/${actionNumber}`, {
       body: dropUndefined({ ...input }),
+    });
+  }
+
+  /**
+   * Write up to four action slots in ONE request.
+   *
+   * Prefer this over looping `update()`. Each single-slot write enqueues its
+   * own silent rooms-refresh push, so configuring a room's four Pings one at a
+   * time wakes the owner's device four times inside a few seconds — four of a
+   * finite daily background-push budget spent on one logical operation.
+   *
+   * Partial and additive: slots absent from `actions` keep their current
+   * configuration, so this is also the right call for editing a single Ping.
+   * Nothing here deletes an action, and an empty array is rejected locally
+   * rather than being sent as a clear. Resolves to the room's full ordered
+   * action set, not just the slots written.
+   */
+  updateMany(inviteCode: string, actions: QuickActionInput[]): Promise<QuickAction[]> {
+    if (!Array.isArray(actions) || actions.length === 0) {
+      throw new PingRoomError('`actions` must contain at least one action.', { code: 'invalid_request' });
+    }
+    if (actions.length > 4) {
+      throw new PingRoomError('A room has only 4 action slots.', { code: 'invalid_request' });
+    }
+
+    const seen = new Set<number>();
+    for (const action of actions) {
+      assertActionNumber(action.action_number);
+      if (action.action_number === undefined || action.action_number === null) {
+        throw new PingRoomError('`action_number` is required for each action.', { code: 'invalid_request' });
+      }
+      // Two entries for one slot would let the last silently win, and the
+      // caller would never learn which of its definitions was stored.
+      if (seen.has(action.action_number)) {
+        throw new PingRoomError(
+          `Duplicate action_number ${action.action_number}.`,
+          { code: 'invalid_request' },
+        );
+      }
+      seen.add(action.action_number);
+      requirePresentString(action.label, 'label');
+      requireNonEmpty(action.icon, 'icon');
+    }
+
+    return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/actions`, {
+      body: { actions: actions.map((action) => dropUndefined({ ...action })) },
     });
   }
 
