@@ -214,6 +214,13 @@ await pr.rooms.join({ invite_code: 'ab12cd' });
 await pr.actions.update('ab12cd', 1, { label: 'Approve', icon: 'check' });
 await pr.actions.trigger('ab12cd', 1);
 
+// Configure a whole room in one request instead of one per button. The array
+// replaces the room's quick actions, so send every button you want to keep.
+await pr.actions.updateMany('ab12cd', [
+  { action_number: 1, label: 'Approve', icon: 'check' },
+  { action_number: 2, label: 'Reject', icon: 'x' },
+]);
+
 // One-shot modifiers on a single press. `trigger_source` is `manual` (default)
 // or `location`; `webhook`/`system` are stamped server-side and rejected here.
 await pr.actions.trigger('ab12cd', 1, {
