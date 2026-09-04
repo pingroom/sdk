@@ -11,7 +11,7 @@
  *    Pass a top-level `live_status` to drive a Live Activity instead.
  */
 
-import { PingRoomError } from './errors.js';
+import { PingRoomError, PingRoomTimeoutError } from './errors.js';
 import { combineSignals } from './internal/async.js';
 import {
   assertActionNumber,
@@ -214,34 +214,38 @@ export async function sendIncomingWebhook(
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000);
+  const timer = setTimeout(() => controller.abort(new PingRoomTimeoutError()), options.timeoutMs ?? 30_000);
   const signal = combineSignals(controller.signal, options.signal);
 
-  let res: Response;
   try {
-    res = await fetchImpl(webhookUrl, { method: 'POST', headers, body: JSON.stringify(body), signal });
+    const res = await fetchImpl(webhookUrl, { method: 'POST', headers, body: JSON.stringify(body), signal, redirect: 'error' });
+    const text = await res.text();
+    let json: unknown = null;
+    if (text) {
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = text;
+      }
+    }
+    const result: IncomingWebhookResult = json && typeof json === 'object' ? (json as IncomingWebhookResult) : { success: res.ok };
+    if (!res.ok || result.success === false) {
+      throw PingRoomError.fromResponse(res.status, json, res.headers);
+    }
+    return result;
   } catch (err) {
+    if (signal.aborted) {
+      throw signal.reason;
+    }
+    if (err instanceof PingRoomError) {
+      throw err;
+    }
     throw new PingRoomError(`Webhook request failed: ${err instanceof Error ? err.message : String(err)}`, {
       code: 'network_error',
     });
   } finally {
     clearTimeout(timer);
   }
-
-  const text = await res.text();
-  let json: unknown = null;
-  if (text) {
-    try {
-      json = JSON.parse(text);
-    } catch {
-      json = text;
-    }
-  }
-  const result: IncomingWebhookResult = json && typeof json === 'object' ? (json as IncomingWebhookResult) : { success: res.ok };
-  if (!res.ok || result.success === false) {
-    throw PingRoomError.fromResponse(res.status, json, res.headers);
-  }
-  return result;
 }
 
 // --- internals ------------------------------------------------------------

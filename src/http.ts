@@ -65,7 +65,7 @@ export class HttpClient {
   }
 
   async request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
-    return this.parse<T>(await this.send(method, path, opts));
+    return this.send(method, path, opts, (res) => this.parse<T>(res));
   }
 
   /**
@@ -74,20 +74,24 @@ export class HttpClient {
    * as if it were content.
    */
   async raw(method: string, path: string, opts: RequestOptions = {}): Promise<Response> {
-    const res = await this.send(method, path, {
+    return this.send(method, path, {
       ...opts,
       headers: { Accept: '*/*', ...opts.headers },
+    }, async (res) => {
+      if (!res.ok) {
+        // Route the failure through the shared JSON error mapping.
+        await this.parse<unknown>(res);
+      }
+      return res;
     });
-
-    if (!res.ok) {
-      // Route the failure through the shared JSON error mapping.
-      await this.parse<unknown>(res);
-    }
-
-    return res;
   }
 
-  private async send(method: string, path: string, opts: RequestOptions = {}): Promise<Response> {
+  private async send<T>(
+    method: string,
+    path: string,
+    opts: RequestOptions,
+    consume: (res: Response) => Promise<T>,
+  ): Promise<T> {
     const url = this.buildUrl(path, opts.query);
 
     const headers: Record<string, string> = {
@@ -121,10 +125,16 @@ export class HttpClient {
     const timer = setTimeout(() => controller.abort(new PingRoomTimeoutError()), timeoutMs);
     const signal = combineSignals(controller.signal, opts.signal);
 
-    let res: Response;
     try {
-      res = await this.fetchImpl(url, { method, headers, body: payload, signal });
+      // A 307/308 can forward pairing secrets or uploaded bytes to another
+      // origin even when fetch strips the Authorization header.
+      const res = await this.fetchImpl(url, { method, headers, body: payload, signal, redirect: 'error' });
+      // Keep the deadline active while reading JSON, including error bodies.
+      return await consume(res);
     } catch (err) {
+      if (signal.aborted) {
+        throw signal.reason;
+      }
       // Our own timeout reason propagates as the rejection.
       if (err instanceof PingRoomError) {
         throw err;
@@ -136,8 +146,6 @@ export class HttpClient {
     } finally {
       clearTimeout(timer);
     }
-
-    return res;
   }
 
   private async parse<T>(res: Response): Promise<T> {
