@@ -461,7 +461,8 @@ test('auth.startPairing leaves the full grant to the server, even for legacy sco
           },
         },
         pair_token: 'pair_123',
-        pair_url: 'https://api.pingroom.io/pair?token=pair_123',
+        pair_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
+        pair_browser_url: 'https://api.pingroom.io/pair?token=pair_123',
         pair_qr_url: 'https://pingroom.io/app/agents/pair?token=pair_123',
         app_install_url: 'https://pingroom.io/i',
         expires_in: 900,
@@ -474,7 +475,8 @@ test('auth.startPairing leaves the full grant to the server, even for legacy sco
   const pairing = await pr.auth.startPairing({ agent_label: 'Deploy bot', scopes });
 
   assert.equal(pairing.pair_token, 'pair_123');
-  assert.equal(pairing.pair_url, 'https://api.pingroom.io/pair?token=pair_123');
+  assert.equal(pairing.pair_url, 'https://pingroom.io/app/agents/pair?token=pair_123');
+  assert.equal(pairing.pair_browser_url, 'https://api.pingroom.io/pair?token=pair_123');
   assert.equal(pairing.pair_qr_url, 'https://pingroom.io/app/agents/pair?token=pair_123');
   assert.equal(pairing.app_install_url, 'https://pingroom.io/i');
   assert.equal(pairing.flow_version, 2);
@@ -834,6 +836,29 @@ test('auth.waitForPairing reports an expired app link without changing the token
     (e) => e instanceof PingRoomError && e.code === 'pairing_expired',
   );
   assert.equal(pr.getToken(), 'pending_token');
+});
+
+test('auth.waitForPairing distinguishes late bearer expiry from early auth failures', async (t) => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  for (const status of [401, 403, 404]) {
+    for (const elapsed of [1000, 600_000]) {
+      now = 1_000_000;
+      const { fetchMock } = recorder({
+        'GET /api/agent/auth/pair/status': () => {
+          now += elapsed;
+          return { status, body: { code: 'invalid_credential', message: 'Credential expired' } };
+        },
+      });
+      const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+      await assert.rejects(
+        () => pr.auth.waitForPairing({ pair_token: 'pair', pair_url: 'https://pingroom.io/pair', expires_in: 900 }),
+        (error) => error instanceof PingRoomError
+          && error.code === (elapsed < 450_000 ? 'invalid_credential' : 'pairing_expired'),
+      );
+      assert.equal(pr.getToken(), 'pending_token');
+    }
+  }
 });
 
 test('auth.waitForPairing rejects an incomplete active response without adopting it', async () => {

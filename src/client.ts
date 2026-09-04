@@ -325,7 +325,8 @@ class AuthApi {
     const lifetimeMs = Math.max(1, Number(pairing.expires_in) || 900) * 1000;
     const requestedInterval = options.pollIntervalMs ?? pairing.poll_interval_ms;
     const intervalMs = Math.min(Math.max(Number(requestedInterval) || 1500, 1000), 10_000);
-    const deadline = Date.now() + lifetimeMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + lifetimeMs;
     let transientFailures = 0;
 
     while (Date.now() < deadline) {
@@ -371,6 +372,17 @@ class AuthApi {
           });
         }
       } catch (error) {
+        if (
+          error instanceof PingRoomError
+          && [401, 403, 404].includes(error.status)
+          && Date.now() - startedAt >= lifetimeMs / 2
+        ) {
+          // The pending bearer can expire before the server returns an
+          // explicit expired pairing state. Keep early auth failures intact.
+          throw new PingRoomError('The PingRoom pairing link expired before it was approved.', {
+            code: 'pairing_expired',
+          });
+        }
         if (
           error instanceof PingRoomError
           && (error.code === 'network_error'

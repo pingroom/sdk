@@ -8,10 +8,8 @@ One typed client for everything an agent does: authenticate, create and join roo
 - **Fully typed** — ships `.d.ts`; request fields mirror the HTTP API verbatim.
 - **Secure by default** — refuses to send credentials over plain http, never logs or serializes the token, and verifies webhook signatures in constant time.
 
-> **Release status:** npm serves 0.4.3. This source tree is 0.4.4 —
-> unpublished — adding the `locationPing()` helper, the one-shot
-> `requires_ack` modifier on `actions.trigger()`, and the `question` /
-> `is_handoff` fields on listened notifications.
+> **Release status:** npm serves 0.4.5. This source tree contains 0.4.6,
+> which adds `actions.updateMany()` and is not yet published.
 
 ```bash
 npm install @pingroom/sdk
@@ -117,7 +115,7 @@ const pairing = await pr.auth.startPairing({
   agent_label: 'Deploy bot',
 });
 
-console.log(`Open to approve: ${pairing.pair_url}`);
+console.log(`Open to approve: ${pairing.pair_browser_url ?? pairing.pair_url}`);
 console.log(`Install PingRoom: ${pairing.app_install_url ?? 'https://pingroom.io/i'}`);
 if (pairing.agent?.profile) {
   const { display_name, handle } = pairing.agent.profile;
@@ -150,11 +148,12 @@ progress. If they need the app, offer `pairing.app_install_url` (or
 PingRoom and sign in before starting pairing when possible. Installing the app
 does not grant the robot access.
 
-`pair_url` opens the API-hosted approval page, where users can sign in or scan
-the app QR. `pair_qr_url` is the app universal link to encode in QR codes. If a
-pairing is already pending, keep and reuse that exact link while the person
-installs; do not create a second robot. Falling back to `pair_url` supports
-older servers. Never copy `pair_token` into an install or store URL.
+`pair_browser_url` opens the API-hosted approval page, where users can sign in
+or scan the app QR; fall back to `pair_url` on older servers. `pair_url` remains
+QR-compatible for existing clients, and `pair_qr_url` is the app universal link
+to encode in QR codes. If a pairing is already pending, reuse that exact link
+while the person installs; do not create a second robot. Never copy
+`pair_token` into an install or store URL.
 
 The grant also comes back as `active.room_access` (`'all'` | `'selected'`) and
 `active.rooms` (`{ id, invite_code, name }[]`, empty under `'all'`).
@@ -211,14 +210,13 @@ await pr.rooms.get('ab12cd');
 await pr.rooms.create({ name: 'Deploys', icon: 'rocket', color: '#e33122' });
 await pr.rooms.join({ invite_code: 'ab12cd' });
 
-await pr.actions.update('ab12cd', 1, { label: 'Approve', icon: 'check' });
+await pr.actions.update('ab12cd', 1, { label: 'Approve', icon: '✅' });
 await pr.actions.trigger('ab12cd', 1);
 
-// Configure a whole room in one request instead of one per button. The array
-// replaces the room's quick actions, so send every button you want to keep.
+// Configure several buttons in one request. Omitted slots stay unchanged.
 await pr.actions.updateMany('ab12cd', [
-  { action_number: 1, label: 'Approve', icon: 'check' },
-  { action_number: 2, label: 'Reject', icon: 'x' },
+  { action_number: 1, label: 'Approve', icon: '✅' },
+  { action_number: 2, label: 'Reject', icon: '❌' },
 ]);
 
 // One-shot modifiers on a single press. `trigger_source` is `manual` (default)

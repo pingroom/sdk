@@ -177,8 +177,10 @@ export interface StartPairingParams {
 /** Short-lived browser and native-app links returned when pairing starts. */
 export interface PairingStart extends PairingIdentityMetadata {
   pair_token: string;
-  /** Canonical browser approval page hosted by the PingRoom API. */
+  /** Legacy approval link, kept QR-compatible for existing clients. */
   pair_url: string;
+  /** Browser approval page. Fall back to `pair_url` on older servers. */
+  pair_browser_url?: string;
   /** Native app universal link for QR renderers. Falls back to `pair_url` on older servers. */
   pair_qr_url?: string;
   /** Token-free smart install link. Never append `pair_token` to it. */
@@ -231,15 +233,15 @@ export interface CreateRoomInput {
   name: string;
   icon: string;
   color: string;
+}
+
+export interface CreatePublicRoomInput extends CreateRoomInput {
+  handle: string;
   description?: string;
   everyone_can_trigger?: boolean;
   is_password_protected?: boolean;
   password?: string;
   actions?: QuickActionInput[];
-}
-
-export interface CreatePublicRoomInput extends CreateRoomInput {
-  handle: string;
   category?: string;
   show_owner?: boolean;
 }
