@@ -6,10 +6,7 @@ One typed client for everything an agent does: authenticate, create and join roo
 
 - **Zero runtime dependencies** — built on the platform `fetch`. Works in Node ≥ 20, browsers, Cloudflare Workers, Deno, and Bun.
 - **Fully typed** — ships `.d.ts`; request fields mirror the HTTP API verbatim.
-- **Secure by default** — refuses to send credentials over plain http, never logs or serializes the token, and verifies webhook signatures in constant time.
-
-> **Release status:** npm serves 0.4.5. This source tree contains 0.4.6,
-> which adds `actions.updateMany()` and is not yet published.
+- **Secure by default** — refuses plain-http credential requests and redirects, applies request deadlines through JSON response reads, and verifies webhook signatures in constant time.
 
 ```bash
 npm install @pingroom/sdk
