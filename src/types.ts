@@ -288,6 +288,56 @@ export interface Room {
   [key: string]: unknown;
 }
 
+/** Catalog ids accepted by room and webhook creation. */
+export interface RoomIconCatalog {
+  version: number;
+  base_url: string;
+  categories: Array<{ id: string; label: string; icons: string[] }>;
+  icons: Record<string, { file: string; tags: string[] }>;
+}
+
+export interface CreateWebhookInput {
+  name: string;
+  title?: string | null;
+  message?: string | null;
+  emoji?: string | null;
+  icon?: string | null;
+  color?: string | null;
+  sound?: string | null;
+  haptic?: string | null;
+  action_number?: number;
+  enabled?: boolean;
+  cooldown_seconds?: number;
+}
+
+export interface UpdateWebhookInput extends Partial<CreateWebhookInput> {
+  /** Rotate the trigger URL; the previous URL stops working. */
+  regenerate_secret?: boolean;
+}
+
+/** Incoming webhook configuration. The trigger URL contains its credential. */
+export interface Webhook {
+  id: string;
+  room_id: string;
+  name: string;
+  title: string | null;
+  message: string | null;
+  emoji: string | null;
+  icon: string | null;
+  color: string | null;
+  sound: string | null;
+  haptic: string | null;
+  action_number: number;
+  enabled: boolean;
+  cooldown_seconds: number;
+  trigger_count: number;
+  last_triggered_at?: string | null;
+  webhook_url: string;
+  created_at: string;
+  updated_at: string;
+  [key: string]: unknown;
+}
+
 // --- pings / notifications ------------------------------------------------
 
 /** A visible Ping — used for broadcasts and the retired direct-ping compatibility method. */
@@ -514,10 +564,20 @@ export type NotificationDetail = Omit<AgentNotificationFields, 'room'> & {
   [key: string]: unknown;
 };
 
+/** History keeps the full room and adds the listener-compatible `room.code`. */
+export interface NotificationHistoryEntry extends AgentNotification {
+  room?: Room & { code: string };
+}
+
 export interface ListNotificationsInput {
   type?: string;
   room_id?: string;
   date?: string;
+  /** Page size (1–25). Omit to retain the server's legacy default. */
+  limit?: number;
+  /** Page number, starting at 1. */
+  page?: number;
+  /** @deprecated Use limit. Sent as limit when limit is absent. */
   notifications_per_page?: number;
 }
 
@@ -664,6 +724,8 @@ export interface QuestionInput {
   reply_to?: string;
   /** Ordered ids from `attachments.upload()` (max 4). Same single-use rules as PingInput. */
   attachment_ids?: string[];
+  /** Reuse this key when retrying the same question creation. */
+  idempotencyKey?: string;
 }
 
 /** A resolved option on the Question wire shape. */
@@ -696,6 +758,8 @@ export interface QuestionAnswer {
 /** The public Question wire shape — identical across ask / get / wait / list. */
 export interface Question {
   id: string;
+  /** Canonical delivery notification when supplied by the server. */
+  notification_id?: string | null;
   kind: 'question';
   prompt: string;
   context: string | null;

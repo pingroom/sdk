@@ -26,6 +26,7 @@ import type {
   ApprovalInput,
   CreatePublicRoomInput,
   CreateRoomInput,
+  CreateWebhookInput,
   Credential,
   ClaimCompleteParams,
   ClaimStartParams,
@@ -43,6 +44,7 @@ import type {
   ListenInput,
   ListQuestionsInput,
   NotificationDetail,
+  NotificationHistoryEntry,
   Paginated,
   PingInput,
   PingResult,
@@ -55,12 +57,14 @@ import type {
   PairingStatus,
   PairedCredential,
   Room,
+  RoomIconCatalog,
   RequestAckInput,
   RotateHandleResult,
   StartPairingParams,
   TriggerInput,
   QuickActionInput,
   UpdateQuickActionInput,
+  UpdateWebhookInput,
   UploadAttachmentInput,
   WaitApprovalInput,
   WaitHandoffInput,
@@ -69,6 +73,7 @@ import type {
   WaitQuestionInput,
   WaitResult,
   WaitForPairingOptions,
+  Webhook,
 } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.pingroom.io';
@@ -426,6 +431,10 @@ class AuthApi {
 class RoomsApi {
   constructor(private readonly http: HttpClient) {}
 
+  icons(): Promise<RoomIconCatalog> {
+    return this.http.request('GET', '/api/agent/room-icons');
+  }
+
   list(): Promise<Room[]> {
     return this.http.request('GET', '/api/agent/rooms');
   }
@@ -523,12 +532,54 @@ class ActionsApi {
   }
 }
 
+class WebhooksApi {
+  constructor(private readonly http: HttpClient) {}
+
+  async list(inviteCode: string): Promise<Webhook[]> {
+    const result = await this.http.request<{ webhooks: Webhook[] }>(
+      'GET', `/api/agent/rooms/${enc(inviteCode)}/webhooks`,
+    );
+    return result.webhooks;
+  }
+
+  create(inviteCode: string, input: CreateWebhookInput): Promise<Webhook> {
+    requireNonEmpty(input.name, 'name');
+    assertActionNumber(input.action_number);
+    return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/webhooks`, {
+      body: dropUndefined({ ...input }),
+    });
+  }
+
+  update(inviteCode: string, webhookId: string, input: UpdateWebhookInput): Promise<Webhook> {
+    requireNonEmpty(webhookId, 'webhookId');
+    assertActionNumber(input.action_number);
+    return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/webhooks/${enc(webhookId)}`, {
+      body: dropUndefined({ ...input }),
+    });
+  }
+
+  async delete(inviteCode: string, webhookId: string): Promise<void> {
+    requireNonEmpty(webhookId, 'webhookId');
+    await this.http.request('DELETE', `/api/agent/rooms/${enc(inviteCode)}/webhooks/${enc(webhookId)}`);
+  }
+}
+
 class NotificationsApi {
   constructor(private readonly http: HttpClient) {}
 
   /** Paginated list (polling fallback). Prefer wait()/listen() for real-time. */
-  list(input: ListNotificationsInput = {}): Promise<Paginated<AgentNotification>> {
-    return this.http.request('GET', '/api/agent/notifications', { query: dropUndefined({ ...input }) });
+  async list(input: ListNotificationsInput = {}): Promise<Paginated<NotificationHistoryEntry>> {
+    const { notifications_per_page, ...query } = input;
+    const page = await this.http.request<Paginated<NotificationDetail>>('GET', '/api/agent/notifications', {
+      query: dropUndefined({ ...query, limit: input.limit ?? notifications_per_page }),
+    });
+    return {
+      ...page,
+      data: page.data.map(({ room, ...notification }) => ({
+        ...notification,
+        ...(room ? { room: { ...room, code: room.invite_code } } : {}),
+      })),
+    };
   }
 
   /** Fetch one visible notification, including its current acknowledgement state. */
@@ -673,8 +724,14 @@ class QuestionsApi {
   ask(inviteCode: string, input: QuestionInput): Promise<Question> {
     requireNonEmpty(input.prompt, 'prompt');
     assertStructuredData(input.data);
+    const { idempotencyKey, ...body } = input;
+    if (idempotencyKey !== undefined) {
+      requireNonEmpty(idempotencyKey, 'idempotencyKey');
+      assertMaxLength(idempotencyKey, 255, 'idempotencyKey');
+    }
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/questions`, {
-      body: dropUndefined({ ...input }),
+      body: dropUndefined(body),
+      ...(idempotencyKey !== undefined ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
     });
   }
 
@@ -1114,6 +1171,7 @@ class DirectoryApi {
 export class PingRoom {
   readonly auth: AuthApi;
   readonly rooms: RoomsApi;
+  readonly webhooks: WebhooksApi;
   readonly actions: ActionsApi;
   readonly notifications: NotificationsApi;
   readonly attachments: AttachmentsApi;
@@ -1142,6 +1200,7 @@ export class PingRoom {
 
     this.auth = new AuthApi(this.http);
     this.rooms = new RoomsApi(this.http);
+    this.webhooks = new WebhooksApi(this.http);
     this.actions = new ActionsApi(this.http);
     this.notifications = new NotificationsApi(this.http);
     this.attachments = new AttachmentsApi(this.http);

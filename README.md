@@ -207,8 +207,10 @@ Generic MCP clients (Cursor, Claude Desktop, Claude Code) should use the standar
 ```ts
 await pr.rooms.list();
 await pr.rooms.get('ab12cd');
+await pr.rooms.icons(); // catalog ids, categories, filenames and tags
 await pr.rooms.create({ name: 'Deploys', icon: 'rocket', color: '#e33122' });
 await pr.rooms.join({ invite_code: 'ab12cd' });
+await pr.rooms.join({ invite_code: 'protected-room', password: 'room-password' });
 
 await pr.actions.update('ab12cd', 1, { label: 'Approve', icon: '✅' });
 await pr.actions.trigger('ab12cd', 1);
@@ -232,6 +234,18 @@ await pr.actions.trigger('ab12cd', 1, {
 only **add** an acknowledgement requirement for that one press — passing `false`
 never removes one from an action already configured to require it. Neither
 modifier edits the action's saved configuration.
+
+Manage incoming webhooks with an agent credential:
+
+```ts
+const hooks = await pr.webhooks.list('ab12cd');
+const hook = await pr.webhooks.create('ab12cd', { name: 'Deploys', icon: 'bell' });
+await pr.webhooks.update('ab12cd', hook.id, { enabled: false });
+await pr.webhooks.delete('ab12cd', hook.id);
+```
+
+Webhook records include `webhook_url`, which contains the trigger credential.
+Updating with `regenerate_secret: true` returns a new URL and revokes the old one.
 
 ## Attachments
 
@@ -305,6 +319,12 @@ Or a single long-poll:
 const { notifications, cursor } = await pr.notifications.wait({ after: lastCursor, timeout: 20 });
 ```
 
+Read history with `pr.notifications.list({ limit: 25, page: 2 })`. Explicit
+limits are 1–25; omitting the limit retains the server's legacy default of 50.
+The deprecated `notifications_per_page` option maps to `limit`; an explicit
+`limit` takes precedence. History preserves the API's room object, including
+`room.invite_code`, and adds `room.code` for consistency with `listen()`.
+
 Read one ping and wait for its acknowledgement through the same namespace:
 
 ```ts
@@ -358,6 +378,7 @@ const q = await pr.questions.ask('ab12cd', {
   responder_scope: 'room',        // or 'direct' (defaults to your bound user)
   ttl: 600,
   correlation_id: 'deploy-1.4.0',
+  idempotencyKey: 'deploy-1.4.0-environment', // reuse when retrying this create
 });
 
 // Block until a human taps (or it expires / is cancelled)
