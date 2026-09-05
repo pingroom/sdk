@@ -32,7 +32,8 @@ export type AgentScope =
   | 'pingroom:questions:ask'
   | 'pingroom:handoffs:create'
   | 'pingroom:live:write'
-  | 'pingroom:profile:write';
+  | 'pingroom:profile:write'
+  | 'pingroom:codes:redeem';
 
 /** A known scope, or any forward-compatible string (keeps autocomplete on the knowns). */
 export type ScopeInput = AgentScope | (string & {});
@@ -52,6 +53,19 @@ export interface PingRoomOptions {
   userAgent?: string;
   /** Allow plain-http base URLs to non-loopback hosts. Off by default — credentials require https. */
   allowInsecure?: boolean;
+}
+
+// --- gift and promotional codes --------------------------------------------
+
+/** Pro entitlement applied to the human who authorized this agent. */
+export interface RedeemCodeResult {
+  message: string;
+  kind: 'gift' | 'redeem';
+  reward_days: number | null;
+  package: string | null;
+  lifetime: boolean;
+  plan: 'pro';
+  plan_expires_at: string | null;
 }
 
 // --- auth -----------------------------------------------------------------

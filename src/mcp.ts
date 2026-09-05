@@ -1,5 +1,6 @@
 import { PingRoomError } from './errors.js';
 import type { HttpClient } from './http.js';
+import { normalizeRedeemCode } from './internal/guards.js';
 import { VERSION } from './version.js';
 
 export interface JsonRpcError {
@@ -92,6 +93,11 @@ export class McpClient {
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<McpToolResult> {
     await this.initialize();
     return this.call<McpToolResult>('tools/call', { name, arguments: args });
+  }
+
+  /** Redeem a gift or promotional code through the authenticated MCP connection. */
+  redeemCode(code: string): Promise<McpToolResult> {
+    return this.callTool('redeem_code', { code: normalizeRedeemCode(code) });
   }
 
   private async performInitialize(params?: Record<string, unknown>): Promise<McpInitializeResult> {

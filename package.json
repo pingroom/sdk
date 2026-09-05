@@ -1,6 +1,6 @@
 {
   "name": "@pingroom/sdk",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Official TypeScript/JavaScript SDK for the PingRoom agent API — app pairing, rooms, pings, human-in-the-loop approvals, questions and handoffs, live status, MCP, and webhook verification.",
   "type": "module",
   "main": "./dist/index.js",

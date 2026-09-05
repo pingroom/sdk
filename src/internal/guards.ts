@@ -66,6 +66,14 @@ export function requireNonEmpty(value: unknown, field: string): void {
   }
 }
 
+/** Validate before uppercasing so Unicode case expansion cannot become a code. */
+export function normalizeRedeemCode(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9]{12}$/.test(value.trim())) {
+    throw new PingRoomError('The code must contain exactly 12 letters or digits.', { code: 'invalid_request' });
+  }
+  return value.trim().toUpperCase();
+}
+
 /**
  * The field must be sent, but may be empty — the server rule is `present`,
  * not `required`. A quick action's `label` is the case: a Ping can be named by

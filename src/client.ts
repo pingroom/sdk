@@ -7,6 +7,7 @@ import {
   assertStructuredData,
   MAX_PING_TITLE_LENGTH,
   MAX_PUBLIC_PING_MESSAGE_LENGTH,
+  normalizeRedeemCode,
   requireNonEmpty,
   requirePresentString,
 } from './internal/guards.js';
@@ -53,6 +54,7 @@ import type {
   QuestionInput,
   QuickAction,
   RegisterParams,
+  RedeemCodeResult,
   PairingStart,
   PairingStatus,
   PairedCredential,
@@ -1222,6 +1224,13 @@ export class PingRoom {
 
   getToken(): string | null {
     return this.http.getToken();
+  }
+
+  /** Redeem a gift or promotional code for this agent's authorizing human. */
+  redeemCode(code: string): Promise<RedeemCodeResult> {
+    return this.http.request('POST', '/api/agent/redeem-code', {
+      body: { code: normalizeRedeemCode(code) },
+    });
   }
 
   /** Broadcast a ping to every member of a room you own. */
