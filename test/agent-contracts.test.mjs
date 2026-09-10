@@ -91,6 +91,13 @@ test('new management and feed APIs remain typed for TypeScript callers', () => {
   const source = `
     import { PingRoom, type AgentNotification, type Webhook, type RoomIconCatalog } from '../dist/index.js';
     const pr = new PingRoom();
+    const confirmed = await pr.broadcast('AB12', { message: 'Confirm', requires_ack: true, ack_mode: 'all' });
+    await pr.actions.trigger('AB12', 1, { ack_mode: 'any' });
+    const mode: 'any' | 'all' | undefined = confirmed.action_state?.mode;
+    const count: number | undefined = confirmed.action_state?.confirmed_count;
+    const total: number | undefined = confirmed.action_state?.required_count;
+    // @ts-expect-error unsupported confirmation rule
+    pr.broadcast('AB12', { message: 'Confirm', ack_mode: 'majority' });
     const page = await pr.notifications.list({ limit: 25, page: 2 });
     const legacy: AgentNotification = page.data[0]!;
     const code: string | undefined = page.data[0]?.room?.code;
@@ -113,4 +120,18 @@ test('new management and feed APIs remain typed for TypeScript callers', () => {
   host.fileExists = (path) => path === filename || exists(path);
   const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram([filename], options, host));
   assert.equal(diagnostics.length, 0, ts.formatDiagnosticsWithColorAndContext(diagnostics, host));
+});
+
+test('confirmation modes reach broadcasts and quick actions while progress survives every read', async () => {
+  const action_state = { status: 'open', mode: 'all', confirmed_count: 1, required_count: 2, confirmed_user_ids: ['member-1'], can_ack: false };
+  const { pr, calls } = clientReturning({ id: 'ping-1', action_state });
+  for (const mode of ['any', 'all']) {
+    await pr.broadcast('AB12', { message: 'Confirm', requires_ack: true, ack_mode: mode });
+    await pr.actions.trigger('AB12', 1, { requires_ack: true, ack_mode: mode });
+  }
+  assert.deepEqual(calls.slice(0, 4).map((call) => JSON.parse(call.body).ack_mode), ['any', 'any', 'all', 'all']);
+  assert.deepEqual((await pr.notifications.getNotification('ping-1')).action_state, action_state);
+  assert.deepEqual((await pr.notifications.waitForAcknowledgement('ping-1', { timeout: 0 })).action_state, action_state);
+  await pr.broadcast('AB12', { message: 'Legacy', requires_ack: true });
+  assert.equal(Object.hasOwn(JSON.parse(calls.at(-1).body), 'ack_mode'), false);
 });

@@ -738,3 +738,29 @@ new PingRoom({
 ## License
 
 MIT
+
+
+## Confirmation modes
+
+```ts
+const ping = await pr.broadcast('ROOM', {
+  message: 'Confirm you are ready',
+  requires_ack: true,
+  ack_mode: 'all',
+  ack_timeout_seconds: 600,
+});
+const result = await pr.notifications.waitForAcknowledgement(ping.id, { timeout: 30 });
+console.log(result.action_state);
+```
+
+`ack_mode: 'any'` is the default and resolves on the first eligible confirmation.
+`all` waits for every original eligible recipient; members who join later are
+excluded. Partial confirmations leave `action_state.status` as `open`, with
+`mode`, `confirmed_count`, and `required_count` showing progress. A wait timeout
+is not a confirmation. The server sends a confirmation notice for each accepted
+confirmation; outgoing `notification.acked` fires only when the rule is met.
+
+The same option works on `pr.actions.trigger(room, slot, { ack_mode: 'all' })`
+when the action requires acknowledgement, and on regular `sendIncomingWebhook`
+pings. It does not change saved action policy or delivery urgency. Live streams
+and direct handoffs keep their existing confirmation behavior.

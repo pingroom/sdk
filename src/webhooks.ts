@@ -22,7 +22,7 @@ import {
 } from './internal/guards.js';
 import { assertSecureUrl } from './internal/url.js';
 import type { LiveStatus } from './liveStatus.js';
-import type { ActionState, FetchLike, JsonObject } from './types.js';
+import type { AckMode, ActionState, FetchLike, JsonObject } from './types.js';
 import { VERSION } from './version.js';
 
 export const WEBHOOK_SIGNATURE_HEADER = 'X-PingRoom-Signature';
@@ -120,6 +120,8 @@ export interface IncomingWebhookPayload {
    * ping. Does NOT raise the delivery priority — that is {@link is_urgent}.
    */
   requires_ack?: boolean;
+  /** Confirmation rule for a regular ping (not live_status); defaults to any. */
+  ack_mode?: AckMode;
   /**
    * Deliver time-sensitive so the ping breaks through Focus / Do Not Disturb.
    * Payload-only and independent of `requires_ack`: a webhook trigger has no
@@ -173,6 +175,7 @@ export const INCOMING_WEBHOOK_FIELDS = [
   'reply_to',
   'is_urgent',
   'requires_ack',
+  'ack_mode',
   'ack_timeout_seconds',
   // Top level, never folded into `data` — the server routes on this key and
   // strips it from `data` so a legacy-path caller cannot spoof completion alerts.

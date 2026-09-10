@@ -378,14 +378,16 @@ export interface PingInput {
    */
   attachment_ids?: string[];
   /**
-   * Open the acknowledgement lifecycle for this ping. First acknowledgement
-   * wins, and recipients see a lock-screen card with an Acknowledge button.
+   * Open the acknowledgement lifecycle for this ping. The ack_mode rule
+   * determines when it resolves, and recipients see a lock-screen card with an Acknowledge button.
    *
    * Does NOT raise the delivery priority — that is {@link SendPingInput.is_urgent},
    * and the two are independent. They were one flag, which meant asking for a
    * ping that cuts through Focus also demanded that somebody acknowledge it.
    */
   requires_ack?: boolean;
+  /** Confirmation rule; defaults to any. all waits for every original eligible recipient. */
+  ack_mode?: AckMode;
   /**
    * Deliver time-sensitive so the ping breaks through Focus / Do Not Disturb.
    * Delivery priority only: no acknowledgement, no Live Activity, nothing asked
@@ -471,10 +473,20 @@ export interface TriggerInput {
    * The action's saved configuration is untouched either way.
    */
   requires_ack?: boolean;
+  /** Applies to this press only, when its effective acknowledgement policy is enabled. */
+  ack_mode?: AckMode;
 }
+
+export type AckMode = 'any' | 'all';
 
 /** The server-authoritative acknowledgement lifecycle attached to a ping. */
 export interface ActionState {
+  /** Omitted by older servers and by the default any mode. */
+  mode?: AckMode;
+  confirmed_count?: number;
+  required_count?: number;
+  /** REST only; public rooms redact identities and MCP omits them. */
+  confirmed_user_ids?: string[];
   status: 'open' | 'acked' | 'expired' | null;
   requires_ack: boolean;
   acked_by: {

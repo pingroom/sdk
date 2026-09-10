@@ -233,6 +233,7 @@ const SERVER_WEBHOOK_FIELDS = [
   'reply_to',
   'is_urgent',
   'requires_ack',
+  'ack_mode',
   'ack_timeout_seconds',
   'live_status',
 ];
@@ -255,6 +256,7 @@ test('sendIncomingWebhook forwards every field the server accepts', async () => 
     reply_to: 'r-1',
     is_urgent: true,
     requires_ack: true,
+    ack_mode: 'all',
     ack_timeout_seconds: 300,
     live_status: { state: 'running', template: 'status' },
   };
@@ -295,4 +297,17 @@ test('sendIncomingWebhook throws PingRoomError with retryAfter on a failure body
     () => sendIncomingWebhook('https://api.pingroom.io/x', { message: 'hi' }, { fetch: fetchMock }),
     (e) => e instanceof PingRoomError && e.code === 'cooldown_active' && e.retryAfter === 5,
   );
+});
+
+test('incoming webhook forwards everyone confirmation and returns partial progress', async () => {
+  let sent;
+  const state = { status: 'open', mode: 'all', confirmed_count: 1, required_count: 3 };
+  const result = await sendIncomingWebhook('https://example.test/hook', {
+    message: 'Confirm', requires_ack: true, ack_mode: 'all',
+  }, { fetch: async (url, init) => {
+    sent = JSON.parse(init.body);
+    return new Response(JSON.stringify({ success: true, action_state: state }));
+  } });
+  assert.deepEqual(sent, { message: 'Confirm', requires_ack: true, ack_mode: 'all' });
+  assert.deepEqual(result.action_state, state);
 });
