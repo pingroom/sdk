@@ -92,7 +92,7 @@ export interface IncomingWebhookPayload {
   message?: string;
   /** Visible Ping title (≤ 40 characters). */
   title?: string;
-  /** Quick-action slot to attribute the ping to (1–4). */
+  /** Quick-action slot to attribute the ping to (1–16; subject to the room owner’s plan). */
   action?: number;
   /** Per-ping emoji override (≤ 16 chars, so ZWJ sequences and skin tones fit). */
   emoji?: string;

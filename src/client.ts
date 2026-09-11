@@ -481,7 +481,8 @@ class ActionsApi {
   }
 
   /**
-   * Write up to four action slots in ONE request.
+   * Write up to 16 action slots in one request. The server enforces the room owner's plan.
+   * Add new pages in complete groups of four; existing slots may be edited individually.
    *
    * Prefer this over looping `update()`. Each single-slot write enqueues its
    * own silent rooms-refresh push, so configuring a room's four Pings one at a
@@ -498,8 +499,8 @@ class ActionsApi {
     if (!Array.isArray(actions) || actions.length === 0) {
       throw new PingRoomError('`actions` must contain at least one action.', { code: 'invalid_request' });
     }
-    if (actions.length > 4) {
-      throw new PingRoomError('A room has only 4 action slots.', { code: 'invalid_request' });
+    if (actions.length > 16) {
+      throw new PingRoomError('A batch may contain at most 16 action slots.', { code: 'invalid_request' });
     }
 
     const seen = new Set<number>();

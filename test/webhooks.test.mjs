@@ -283,7 +283,7 @@ test('sendIncomingWebhook refuses an insecure URL', async () => {
 
 test('sendIncomingWebhook validates the action slot', async () => {
   await assert.rejects(
-    () => sendIncomingWebhook('https://api.pingroom.io/x', { action: 9 }, { fetch: async () => new Response('{}') }),
+    () => sendIncomingWebhook('https://api.pingroom.io/x', { action: 17 }, { fetch: async () => new Response('{}') }),
     (e) => e instanceof PingRoomError && e.code === 'invalid_request',
   );
 });

@@ -88,7 +88,7 @@ export interface LiveStatusPing {
   correlation_id: string;
   live_status: LiveStatus;
   title?: string;
-  /** Quick-action slot 1–4 supplying the icon and sound. */
+  /** Quick-action slot 1–16 supplying the icon and sound. */
   action?: number;
   data?: Record<string, unknown>;
   requires_ack?: boolean;

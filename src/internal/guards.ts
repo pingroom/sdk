@@ -55,8 +55,8 @@ export function assertActionNumber(n: unknown): void {
   if (n === undefined || n === null) {
     return;
   }
-  if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 4) {
-    throw new PingRoomError('action_number must be an integer 1–4.', { code: 'invalid_request' });
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 16) {
+    throw new PingRoomError('action_number must be an integer 1–16.', { code: 'invalid_request' });
   }
 }
 

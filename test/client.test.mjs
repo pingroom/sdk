@@ -109,14 +109,10 @@ test('actions.updateMany rejects a malformed batch before spending a request', a
   // An empty array is a caller bug, not a way to clear a room's Pings.
   assert.throws(() => pr.actions.updateMany('ab12', []), /at least one action/);
   assert.throws(
-    () => pr.actions.updateMany('ab12', [
-      { action_number: 1, label: 'a', icon: '1' },
-      { action_number: 2, label: 'b', icon: '2' },
-      { action_number: 3, label: 'c', icon: '3' },
-      { action_number: 4, label: 'd', icon: '4' },
-      { action_number: 1, label: 'e', icon: '5' },
-    ]),
-    /only 4 action slots/,
+    () => pr.actions.updateMany('ab12', Array.from({ length: 17 }, (_, i) => ({
+      action_number: i + 1, label: 'Ready', icon: '✅',
+    }))),
+    /at most 16 action slots/,
   );
   // Two entries for one slot: the last would silently win server-side.
   assert.throws(
