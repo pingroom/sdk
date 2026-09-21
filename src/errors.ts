@@ -75,8 +75,43 @@ export const AGENT_INBOX_ERROR_CODES = [
   'feature_temporarily_unavailable',
 ] as const;
 
+/**
+ * The coded failures of the quick-action surface (`actions.*` and a
+ * `broadcast()` that names an `action_number`).
+ *
+ * Server: `Room::assertQuickActionAccessible/Configured`, `QuickActionDispatcher`
+ * and `QuickActionLayoutService`.
+ */
+export const QUICK_ACTION_ERROR_CODES = [
+  // 422 — the action has an input_type and the press carried no matching detail.
+  'quick_action_input_required',
+  // 422 — photo/pdf actions accept only jpg/png or pdf attachments.
+  'quick_action_input_type',
+  // 404 — the slot is reserved but disabled (empty label and icon).
+  'action_not_configured',
+  // 403 — slots 5–16 and layout edits need the ROOM OWNER on Pro; attachments need this account.
+  'pro_required',
+  // 409 — base_action_ids / quick_action_id no longer match the stored layout.
+  'quick_action_layout_changed',
+  // 409 — a time trigger, webhook, agent binding or running live update still uses the page.
+  'quick_action_page_in_use',
+] as const;
+
+/**
+ * Request-size failures. The server answers every oversized `api/*` body with
+ * `413 {"code":"payload_too_large"}`; the SDK refuses a >5 MiB attachment
+ * locally with `attachment_too_large` before any bytes are sent.
+ */
+export const REQUEST_LIMIT_ERROR_CODES = ['payload_too_large', 'attachment_too_large'] as const;
+
 /** @see ROOM_SCOPED_ERROR_CODES */
 export type RoomScopedErrorCode = (typeof ROOM_SCOPED_ERROR_CODES)[number];
+
+/** @see QUICK_ACTION_ERROR_CODES */
+export type QuickActionErrorCode = (typeof QUICK_ACTION_ERROR_CODES)[number];
+
+/** @see REQUEST_LIMIT_ERROR_CODES */
+export type RequestLimitErrorCode = (typeof REQUEST_LIMIT_ERROR_CODES)[number];
 
 /** @see HANDOFF_ERROR_CODES */
 export type HandoffErrorCode = (typeof HANDOFF_ERROR_CODES)[number];
@@ -88,7 +123,12 @@ export type AgentInboxErrorCode = (typeof AGENT_INBOX_ERROR_CODES)[number];
  * Every machine `code` this SDK's typed unions cover, for callers that branch
  * once across surfaces instead of per-endpoint.
  */
-export type AgentErrorCode = HandoffErrorCode | RoomScopedErrorCode | AgentInboxErrorCode;
+export type AgentErrorCode =
+  | HandoffErrorCode
+  | RoomScopedErrorCode
+  | AgentInboxErrorCode
+  | QuickActionErrorCode
+  | RequestLimitErrorCode;
 
 export interface PingRoomErrorInit {
   status?: number;

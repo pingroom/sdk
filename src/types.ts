@@ -233,14 +233,43 @@ export interface WaitForPairingOptions {
 
 // --- rooms & quick actions ------------------------------------------------
 
+/**
+ * The detail every press of a quick action must carry. `location` needs
+ * `data.location`, `link` needs `data.url`, `file`/`photo`/`pdf` need
+ * `attachment_ids` (photo: jpg/png only, pdf: pdf only). A press without it is
+ * refused with `422 quick_action_input_required` and nothing is sent.
+ */
+export type QuickActionInputType = 'none' | 'location' | 'link' | 'file' | 'photo' | 'pdf';
+
 export interface QuickActionInput {
   action_number: number;
   label: string;
+  /**
+   * Emoji or icon id. Sending `label` and `icon` both empty reserves the slot
+   * as disabled: it stays in the layout and a press answers `404
+   * action_not_configured`.
+   */
   icon: string;
   sound?: string | null;
   haptic_style?: string | null;
   /** Every fire of this reusable action opens the acknowledgement lifecycle. */
   requires_ack?: boolean;
+  /** Omit to keep the stored value; new slots default to `none`. */
+  input_type?: QuickActionInputType;
+}
+
+/**
+ * Body of `actions.updateLayout()`. `page_order` lists the new page positions:
+ * each entry is the ORIGINAL page number (1–4) to keep at that index, or
+ * `null` for a fresh blank page; original pages absent from the list are
+ * deleted. `actions` is the full renumbered 4–16 set. `base_action_ids` is
+ * every stored action id in `action_number` order as last read — a stale
+ * snapshot is refused with `409 quick_action_layout_changed`.
+ */
+export interface UpdateQuickActionLayoutInput {
+  base_action_ids: string[];
+  page_order: Array<number | null>;
+  actions: QuickActionInput[];
 }
 
 export interface CreateRoomInput {
@@ -258,6 +287,13 @@ export interface CreatePublicRoomInput extends CreateRoomInput {
   actions?: QuickActionInput[];
   category?: string;
   show_owner?: boolean;
+  /**
+   * Public-room location for nearby discovery. Send all three or none —
+   * `createPublic()` rejects a partial trio locally, the server with a 422.
+   */
+  location_name?: string;
+  location_latitude?: number;
+  location_longitude?: number;
 }
 
 export interface JoinRoomInput {
@@ -276,6 +312,8 @@ export interface UpdateQuickActionInput {
   haptic_style?: string | null;
   /** Every fire of this reusable action opens the acknowledgement lifecycle. */
   requires_ack?: boolean;
+  /** Omit to keep the stored value. */
+  input_type?: QuickActionInputType;
 }
 
 export interface QuickAction {
@@ -287,6 +325,8 @@ export interface QuickAction {
   haptic_style?: string | null;
   /** Every fire of this reusable action opens the acknowledgement lifecycle. */
   requires_ack?: boolean;
+  /** Missing on pre-2026-09-16 rows; treat absent as `none`. */
+  input_type?: QuickActionInputType;
   [key: string]: unknown;
 }
 
@@ -299,6 +339,13 @@ export interface Room {
   is_public?: boolean;
   handle?: string | null;
   quick_actions?: QuickAction[];
+  /** 4, or 16 while the room owner is Pro. */
+  quick_action_limit?: 4 | 16;
+  /** Every stored slot, including pages hidden by a lapsed Pro. */
+  quick_action_count?: number;
+  location_name?: string | null;
+  location_latitude?: number | null;
+  location_longitude?: number | null;
   [key: string]: unknown;
 }
 
@@ -389,7 +436,8 @@ export interface PingInput {
   /** Confirmation rule; defaults to any. all waits for every original eligible recipient. */
   ack_mode?: AckMode;
   /**
-   * Deliver time-sensitive so the ping breaks through Focus / Do Not Disturb.
+   * Deliver time-sensitive so the ping breaks through Focus / Do Not Disturb
+   * and reaches members who muted the room or you (a block still wins).
    * Delivery priority only: no acknowledgement, no Live Activity, nothing asked
    * of the recipient. Set alongside `requires_ack` for an acknowledgement that
    * also cuts through Focus.
@@ -461,7 +509,8 @@ export interface TriggerInput {
   trigger_source?: 'manual' | 'location';
   /**
    * Deliver this one press time-sensitive so it breaks through Focus / Do Not
-   * Disturb. Send-time only — the action's saved configuration is untouched,
+   * Disturb and reaches members who muted the room or you (a block still
+   * wins). Send-time only — the action's saved configuration is untouched,
    * and quick actions have no stored urgency policy to override. Never implies
    * `requires_ack`, which is the action's own saved acknowledgement policy.
    */
@@ -475,6 +524,39 @@ export interface TriggerInput {
   requires_ack?: boolean;
   /** Applies to this press only, when its effective acknowledgement policy is enabled. */
   ack_mode?: AckMode;
+  /**
+   * The detail this press carries when the action has an `input_type`. Only
+   * `location` and `url` are accepted on a trigger — no `button_label`; build
+   * the fragments with `locationPing()` / `linkPing()` or pass them directly.
+   */
+  data?: TriggerData;
+  /**
+   * Ids from `attachments.upload()`, at most 4. Required when `input_type` is
+   * `file`, `photo` (jpg/png only) or `pdf` (pdf only); a mismatched type is
+   * `422 quick_action_input_type`.
+   */
+  attachment_ids?: string[];
+  /**
+   * The action's `id` as read from `actions.list()`. When that slot has since
+   * moved pages the press is refused with `409 quick_action_layout_changed`
+   * rather than firing the wrong Ping.
+   */
+  quick_action_id?: string;
+}
+
+/** The closed `data` object a quick-action press may carry. */
+export interface TriggerData {
+  location?: TriggerLocation;
+  /** Absolute http(s) URL, at most 2048 characters. */
+  url?: string;
+}
+
+/** Same shape as `LocationPingLocation`; declared here to keep types.ts import-free. */
+export interface TriggerLocation {
+  latitude: number;
+  longitude: number;
+  label?: string;
+  address?: string;
 }
 
 export type AckMode = 'any' | 'all';
@@ -496,8 +578,16 @@ export interface ActionState {
   } | null;
   acked_at: string | null;
   expires_at: string | null;
+  /** Set when the confirmation window was closed early. */
+  ended_at?: string | null;
   /** Viewer-specific human mutation eligibility; agent read paths return false. */
   can_ack?: boolean;
+  /** Recipients who dismissed the card without confirming. Never counts as a confirmation. */
+  dismissed_count?: number;
+  /** REST only; public rooms redact identities and MCP omits them. */
+  dismissed_user_ids?: string[];
+  /** Viewer-scoped: when the reading viewer dismissed it. */
+  dismissed_at?: string | null;
 }
 
 export interface PingResult {
@@ -552,6 +642,13 @@ interface AgentNotificationFields {
   reply_to?: string | null;
   attachments?: Attachment[];
   action_state?: ActionState | null;
+  /** Confirmation rule the ping was sent with; absent on older rows. */
+  ack_mode?: AckMode;
+  /**
+   * Delivered without sound/haptics (the sender's silent mode at send time).
+   * `null` on rows written before 2026-09-16; not surfaced through MCP.
+   */
+  is_silent?: boolean | null;
   /**
    * The embedded Question when this ping carries one, else null. Same wire
    * shape as the dedicated Question read paths.

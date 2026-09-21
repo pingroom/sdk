@@ -111,6 +111,19 @@ test('new management and feed APIs remain typed for TypeScript callers', () => {
     pr.webhooks.create('AB12', { enabled: true });
     // @ts-expect-error limits are numeric
     pr.notifications.list({ limit: '25' });
+    await pr.actions.update('AB12', 2, { label: 'Where?', icon: '📍', input_type: 'location' });
+    const pressed = await pr.actions.trigger('AB12', 2, { data: { location: { latitude: 25.2, longitude: 55.3 } }, attachment_ids: ['a'], quick_action_id: 'id' });
+    const dismissed: number | undefined = pressed.action_state?.dismissed_count;
+    const silent: boolean | null | undefined = legacy.is_silent;
+    const inputType: 'none' | 'location' | 'link' | 'file' | 'photo' | 'pdf' | undefined = (await pr.actions.list('AB12'))[0]?.input_type;
+    const limit: 4 | 16 | undefined = (await pr.rooms.get('AB12')).quick_action_limit;
+    await pr.actions.updateLayout('AB12', { base_action_ids: [], page_order: [1, null], actions: [] });
+    await pr.actions.deletePage('AB12', 2);
+    await pr.rooms.createPublic({ name: 'M', icon: 'globe', color: '#0391fe', handle: 'm', location_name: 'D', location_latitude: 1, location_longitude: 2 });
+    // @ts-expect-error unknown input type
+    pr.actions.update('AB12', 2, { label: 'x', icon: 'y', input_type: 'video' });
+    // @ts-expect-error button_label is not accepted on a press
+    pr.actions.trigger('AB12', 2, { data: { url: 'https://x.example', button_label: 'Open' } });
   `;
   const options = { strict: true, noEmit: true, skipLibCheck: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext };
   const host = ts.createCompilerHost(options);
@@ -134,4 +147,13 @@ test('confirmation modes reach broadcasts and quick actions while progress survi
   assert.deepEqual((await pr.notifications.waitForAcknowledgement('ping-1', { timeout: 0 })).action_state, action_state);
   await pr.broadcast('AB12', { message: 'Legacy', requires_ack: true });
   assert.equal(Object.hasOwn(JSON.parse(calls.at(-1).body), 'ack_mode'), false);
+});
+
+test('quick action and request-limit error codes are exported as runtime unions', async () => {
+  const { QUICK_ACTION_ERROR_CODES, REQUEST_LIMIT_ERROR_CODES } = await import('../dist/index.js');
+  assert.deepEqual([...QUICK_ACTION_ERROR_CODES], [
+    'quick_action_input_required', 'quick_action_input_type', 'action_not_configured',
+    'pro_required', 'quick_action_layout_changed', 'quick_action_page_in_use',
+  ]);
+  assert.deepEqual([...REQUEST_LIMIT_ERROR_CODES], ['payload_too_large', 'attachment_too_large']);
 });

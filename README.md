@@ -28,8 +28,8 @@ await pr.broadcast('ab12cd', {
 });
 
 // `is_urgent` and `requires_ack` are independent. Urgent changes DELIVERY —
-// the push breaks through Focus / Do Not Disturb — and asks nothing of the
-// recipient. `requires_ack` holds the ping open until someone taps Acknowledge
+// the push breaks through Focus / Do Not Disturb and reaches members who muted
+// the room or you (a block still wins) — and asks nothing of the recipient. `requires_ack` holds the ping open until someone taps Acknowledge
 // on the lock-screen card, and does not raise the interruption level on its
 // own. Set both for an acknowledgement that also cuts through Focus.
 await pr.broadcast('ab12cd', {
@@ -231,6 +231,68 @@ await pr.actions.trigger('ab12cd', 1, {
 only **add** an acknowledgement requirement for that one press — passing `false`
 never removes one from an action already configured to require it. Neither
 modifier edits the action's saved configuration.
+
+### Quick actions that need a detail
+
+An action can require a detail from whoever presses it: `input_type` is `none`
+(default), `location`, `link`, `file`, `photo` or `pdf`. Read it from
+`actions.list()` before pressing — a press without the matching detail is
+refused with `422 quick_action_input_required` and nothing is sent.
+
+```ts
+await pr.actions.update('ab12cd', 2, { label: 'Where are you?', icon: '📍', input_type: 'location' });
+
+const [action] = await pr.actions.list('ab12cd'); // action.input_type === 'location'
+await pr.actions.trigger('ab12cd', 2, {
+  quick_action_id: action.id, // refused with 409 quick_action_layout_changed if the slot moved pages
+  data: { location: { latitude: 25.2048, longitude: 55.2708, label: 'Dubai Mall' } },
+});
+await pr.actions.trigger('ab12cd', 3, { data: { url: 'https://ci.example.com/run/42' } }); // input_type: link
+const file = await pr.attachments.upload({ filename: 'receipt.pdf', content: bytes }); // Pro
+await pr.actions.trigger('ab12cd', 4, { attachment_ids: [file.id] }); // input_type: file | photo | pdf
+```
+
+`data` on a press accepts only `location` and `url` (no `button_label`); the
+SDK validates both locally with the same rules as `locationPing()` / `linkPing()`.
+`photo` accepts jpg/png only and `pdf` only pdf — a mismatch is
+`422 quick_action_input_type`.
+
+Sending `label` and `icon` both empty reserves a slot as **disabled**: it keeps
+its place in the layout and a press answers `404 action_not_configured`. An
+icon is still required whenever a label is set.
+
+### Quick Ping pages
+
+Rooms hold up to four pages of four slots (5–16 only while the room owner is
+Pro). `updateMany()` adds pages as complete groups of four. To delete or
+reorder pages use the layout route:
+
+```ts
+await pr.actions.deletePage('ab12cd', 2); // reads the layout, drops page 2, shifts page 3–4 left
+
+// Or drive the snapshot contract yourself:
+const stored = await pr.actions.list('ab12cd');
+await pr.actions.updateLayout('ab12cd', {
+  base_action_ids: stored.map((a) => a.id!), // every stored id in action_number order
+  page_order: [2, 1],                         // original page 2 first, then page 1; page 3+ deleted
+  actions: renumbered,                        // the full 8 slots for two pages
+});
+```
+
+A stale `base_action_ids` is `409 quick_action_layout_changed`; a page still
+targeted by a time trigger, webhook, agent binding or running live update is
+`409 quick_action_page_in_use`. Rooms also report `quick_action_limit` (4 or
+16) and `quick_action_count`.
+
+Public rooms can carry a location for nearby discovery — send all three fields
+or none:
+
+```ts
+await pr.rooms.createPublic({
+  name: 'Meetup', icon: 'globe', color: '#0391fe', handle: 'meetup',
+  location_name: 'Dubai Mall', location_latitude: 25.2048, location_longitude: 55.2708,
+});
+```
 
 Manage incoming webhooks with an agent credential:
 
@@ -721,7 +783,9 @@ surface, so you can branch exhaustively:
 | `HandoffErrorCode` / `HANDOFF_ERROR_CODES` | `handoffs.*` |
 | `RoomScopedErrorCode` / `ROOM_SCOPED_ERROR_CODES` | every call whose path names a room (`rooms.get`, `actions.*`, `broadcast`, `webhooks.*`, `live.*`) |
 | `AgentInboxErrorCode` / `AGENT_INBOX_ERROR_CODES` | `inbox.ensure()` / `inbox.activate()` |
-| `AgentErrorCode` | all three, for one shared branch |
+| `QuickActionErrorCode` / `QUICK_ACTION_ERROR_CODES` | `actions.*` and a `broadcast()` naming an `action_number`: `quick_action_input_required`, `quick_action_input_type`, `action_not_configured`, `pro_required`, `quick_action_layout_changed`, `quick_action_page_in_use` |
+| `RequestLimitErrorCode` / `REQUEST_LIMIT_ERROR_CODES` | `payload_too_large` (HTTP 413 from the server on any oversized body) and `attachment_too_large` (raised locally by `attachments.upload()` above 5 MiB, before any bytes travel) |
+| `AgentErrorCode` | all five, for one shared branch |
 
 ## Configuration
 
@@ -756,8 +820,9 @@ console.log(result.action_state);
 `ack_mode: 'any'` is the default and resolves on the first eligible confirmation.
 `all` waits for every original eligible recipient; members who join later are
 excluded. Partial confirmations leave `action_state.status` as `open`, with
-`mode`, `confirmed_count`, and `required_count` showing progress. A wait timeout
-is not a confirmation. The server sends a confirmation notice for each accepted
+`mode`, `confirmed_count`, and `required_count` showing progress;
+`dismissed_count` counts recipients who dismissed the card, which never counts
+as a confirmation. A wait timeout is not a confirmation. The server sends a confirmation notice for each accepted
 confirmation; outgoing `notification.acked` fires only when the rule is met.
 
 The same option works on `pr.actions.trigger(room, slot, { ack_mode: 'all' })`

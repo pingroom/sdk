@@ -11,7 +11,9 @@ import {
   requireNonEmpty,
   requirePresentString,
 } from './internal/guards.js';
+import { linkPing } from './linkPing.js';
 import type { LiveStatusPing, LiveStatusResult, LiveStatusSnapshot } from './liveStatus.js';
+import { locationPing } from './locationPing.js';
 import { McpClient } from './mcp.js';
 import type {
   AcknowledgementWaitResult,
@@ -66,6 +68,7 @@ import type {
   TriggerInput,
   QuickActionInput,
   UpdateQuickActionInput,
+  UpdateQuickActionLayoutInput,
   UpdateWebhookInput,
   UploadAttachmentInput,
   WaitApprovalInput,
@@ -79,6 +82,11 @@ import type {
 } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.pingroom.io';
+/** Server cap per uploaded file; a larger body is a 413 the server answers before reading it. */
+const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const MAX_TRIGGER_ATTACHMENTS = 4;
+const QUICK_ACTION_PAGE_SIZE = 4;
+const MAX_QUICK_ACTION_PAGES = 4;
 /** Extra wall-clock allowance over the server's hold window for long-poll calls. */
 const LONG_POLL_BUFFER_MS = 10_000;
 const DEFAULT_WAIT_SECONDS = 20;
@@ -102,6 +110,55 @@ function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
     }
   }
   return out as Partial<T>;
+}
+
+/**
+ * Mirrors the server's `icon` rule (`present`, `required_with:label`): the emoji
+ * is the half that must be there unless BOTH are empty, which reserves the
+ * slot as disabled.
+ */
+function assertQuickActionIcon(action: { label: unknown; icon: unknown }): void {
+  requirePresentString(action.label, 'label');
+  requirePresentString(action.icon, 'icon');
+  if ((action.icon as string).trim() === '' && (action.label as string).trim() !== '') {
+    throw new PingRoomError('`icon` is required when `label` is set; send both empty to disable the slot.', {
+      code: 'invalid_request',
+    });
+  }
+}
+
+function assertTriggerInput(input: TriggerInput): void {
+  const data = input.data;
+  if (data !== undefined) {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+      throw new PingRoomError('`data` must be an object with `location` and/or `url`.', { code: 'invalid_request' });
+    }
+    for (const key of Object.keys(data)) {
+      if (key !== 'location' && key !== 'url') {
+        throw new PingRoomError(`\`data.${key}\` is not accepted on a quick-action press; only location and url are.`, {
+          code: 'invalid_request',
+        });
+      }
+    }
+    try {
+      if (data.location !== undefined) locationPing(data.location);
+      if (data.url !== undefined) linkPing({ url: data.url });
+    } catch (error) {
+      throw new PingRoomError((error as Error).message, { code: 'invalid_request' });
+    }
+  }
+  if (input.attachment_ids !== undefined) {
+    if (!Array.isArray(input.attachment_ids) || input.attachment_ids.length > MAX_TRIGGER_ATTACHMENTS) {
+      throw new PingRoomError(`\`attachment_ids\` accepts at most ${MAX_TRIGGER_ATTACHMENTS} ids.`, { code: 'invalid_request' });
+    }
+    for (const id of input.attachment_ids) requireNonEmpty(id, 'attachment_ids[]');
+  }
+}
+
+function attachmentByteLength(content: UploadAttachmentInput['content']): number {
+  if (content instanceof Blob) return content.size;
+  if (typeof content === 'string') return new TextEncoder().encode(content).byteLength;
+  return content.byteLength;
 }
 
 function assertPing(ping: PingInput): void {
@@ -453,6 +510,14 @@ class RoomsApi {
   createPublic(input: CreatePublicRoomInput): Promise<Room> {
     requireNonEmpty(input.name, 'name');
     requireNonEmpty(input.handle, 'handle');
+    // The server takes the location trio all-or-nothing; a partial set is a
+    // 422 on a field the caller may not have meant to send at all.
+    const present = [input.location_name, input.location_latitude, input.location_longitude].filter((v) => v !== undefined).length;
+    if (present !== 0 && present !== 3) {
+      throw new PingRoomError('Send `location_name`, `location_latitude` and `location_longitude` together, or none of them.', {
+        code: 'invalid_request',
+      });
+    }
     return this.http.request('POST', '/api/agent/rooms/public', { body: dropUndefined({ ...input }) });
   }
 
@@ -472,9 +537,9 @@ class ActionsApi {
   update(inviteCode: string, actionNumber: number, input: UpdateQuickActionInput): Promise<QuickAction> {
     assertActionNumber(actionNumber);
     // A Ping's title is optional — its emoji can be the whole name — so an
-    // empty `label` is a valid update. `icon` is the half that must be there.
-    requirePresentString(input.label, 'label');
-    requireNonEmpty(input.icon, 'icon');
+    // empty `label` is a valid update. `icon` is the half that must be there,
+    // unless both are empty: that reserves the slot as disabled.
+    assertQuickActionIcon(input);
     return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/actions/${actionNumber}`, {
       body: dropUndefined({ ...input }),
     });
@@ -518,8 +583,7 @@ class ActionsApi {
         );
       }
       seen.add(action.action_number);
-      requirePresentString(action.label, 'label');
-      requireNonEmpty(action.icon, 'icon');
+      assertQuickActionIcon(action);
     }
 
     return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/actions`, {
@@ -527,10 +591,110 @@ class ActionsApi {
     });
   }
 
+  /**
+   * Press a slot. When the action has an `input_type`, pass the matching
+   * detail (`data.location`, `data.url`, or `attachment_ids`) or the server
+   * refuses the press with `422 quick_action_input_required` and sends nothing.
+   * Read `input_type` from `list()` first; pass the action's `id` as
+   * `quick_action_id` to be refused rather than fire the wrong Ping if the
+   * owner moved pages meanwhile.
+   */
   trigger(inviteCode: string, actionNumber: number, input: TriggerInput = {}): Promise<PingResult> {
     assertActionNumber(actionNumber);
+    assertTriggerInput(input);
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/actions/${actionNumber}/trigger`, {
       body: dropUndefined({ ...input }),
+    });
+  }
+
+  /**
+   * Replace the room's page layout atomically (room owner on Pro only). See
+   * `UpdateQuickActionLayoutInput` for the snapshot contract; a stale
+   * `base_action_ids` is `409 quick_action_layout_changed`, a page still used
+   * by a time trigger, webhook, agent binding or running live update is
+   * `409 quick_action_page_in_use`. Prefer `deletePage()`, which builds the
+   * body from a fresh read.
+   */
+  updateLayout(inviteCode: string, input: UpdateQuickActionLayoutInput): Promise<QuickAction[]> {
+    if (!Array.isArray(input.base_action_ids)) {
+      throw new PingRoomError('`base_action_ids` must be an array of action ids (may be empty).', { code: 'invalid_request' });
+    }
+    if (!Array.isArray(input.page_order) || input.page_order.length < 1 || input.page_order.length > MAX_QUICK_ACTION_PAGES) {
+      throw new PingRoomError(`\`page_order\` must list 1–${MAX_QUICK_ACTION_PAGES} pages.`, { code: 'invalid_request' });
+    }
+    for (const page of input.page_order) {
+      if (page !== null && (!Number.isInteger(page) || page < 1 || page > MAX_QUICK_ACTION_PAGES)) {
+        throw new PingRoomError('`page_order` entries must be an original page number 1–4 or null for a blank page.', {
+          code: 'invalid_request',
+        });
+      }
+    }
+    const expected = input.page_order.length * QUICK_ACTION_PAGE_SIZE;
+    if (!Array.isArray(input.actions) || input.actions.length !== expected) {
+      throw new PingRoomError(`\`actions\` must hold exactly ${expected} slots for ${input.page_order.length} page(s).`, {
+        code: 'invalid_request',
+      });
+    }
+    const seen = new Set<number>();
+    for (const action of input.actions) {
+      assertActionNumber(action.action_number);
+      if (seen.has(action.action_number)) {
+        throw new PingRoomError(`Duplicate action_number ${action.action_number}.`, { code: 'invalid_request' });
+      }
+      seen.add(action.action_number);
+      assertQuickActionIcon(action);
+    }
+    return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/actions/layout`, {
+      body: {
+        base_action_ids: input.base_action_ids,
+        page_order: input.page_order,
+        actions: input.actions.map((action) => dropUndefined({ ...action })),
+      },
+    });
+  }
+
+  /**
+   * Delete one page (1–4) and shift the later pages left, keeping every other
+   * slot's configuration. Reads the current action set first so the layout
+   * snapshot is real, then calls `updateLayout()`. Page 1 can be deleted only
+   * when another page remains.
+   */
+  async deletePage(inviteCode: string, page: number): Promise<QuickAction[]> {
+    if (!Number.isInteger(page) || page < 1 || page > MAX_QUICK_ACTION_PAGES) {
+      throw new PingRoomError('`page` must be an integer 1–4.', { code: 'invalid_request' });
+    }
+    const current = await this.list(inviteCode);
+    const stored = [...current].sort((a, b) => a.action_number - b.action_number);
+    const pageCount = Math.max(1, Math.ceil((stored.at(-1)?.action_number ?? 0) / QUICK_ACTION_PAGE_SIZE));
+    if (page > pageCount) {
+      throw new PingRoomError(`The room has ${pageCount} page(s); page ${page} does not exist.`, { code: 'invalid_request' });
+    }
+    if (pageCount === 1) {
+      throw new PingRoomError('A room keeps at least one page; configure its slots instead of deleting it.', {
+        code: 'invalid_request',
+      });
+    }
+    const keep = Array.from({ length: pageCount }, (_, i) => i + 1).filter((p) => p !== page);
+    const byNumber = new Map(stored.map((a) => [a.action_number, a]));
+    const actions: QuickActionInput[] = [];
+    keep.forEach((originalPage, index) => {
+      for (let offset = 1; offset <= QUICK_ACTION_PAGE_SIZE; offset++) {
+        const source = byNumber.get((originalPage - 1) * QUICK_ACTION_PAGE_SIZE + offset);
+        actions.push({
+          action_number: index * QUICK_ACTION_PAGE_SIZE + offset,
+          label: source?.label ?? '',
+          icon: source?.icon ?? '',
+          ...(source?.sound !== undefined ? { sound: source.sound } : {}),
+          ...(source?.haptic_style !== undefined ? { haptic_style: source.haptic_style } : {}),
+          ...(source?.requires_ack !== undefined ? { requires_ack: source.requires_ack } : {}),
+          ...(source?.input_type !== undefined ? { input_type: source.input_type } : {}),
+        });
+      }
+    });
+    return this.updateLayout(inviteCode, {
+      base_action_ids: stored.map((a) => a.id).filter((id): id is string => typeof id === 'string'),
+      page_order: keep,
+      actions,
     });
   }
 }
@@ -1089,6 +1253,13 @@ class AttachmentsApi {
   /** Upload one file and get back the id a send can claim. */
   upload(input: UploadAttachmentInput): Promise<Attachment> {
     requireNonEmpty(input.filename, 'filename');
+    // The server answers an oversized body with 413 before reading it; refuse
+    // locally so no bytes travel for a file that can never be accepted.
+    if (attachmentByteLength(input.content) > ATTACHMENT_MAX_BYTES) {
+      return Promise.reject(
+        new PingRoomError('Attachments are at most 5 MiB each.', { code: 'attachment_too_large', status: 413 }),
+      );
+    }
 
     const body = new FormData();
     body.append('file', toAttachmentBlob(input), input.filename);

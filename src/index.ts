@@ -23,6 +23,8 @@ export {
   AGENT_INBOX_ERROR_CODES,
   HANDOFF_ERROR_CODES,
   ROOM_SCOPED_ERROR_CODES,
+  QUICK_ACTION_ERROR_CODES,
+  REQUEST_LIMIT_ERROR_CODES,
 } from './errors.js';
 export type {
   AgentErrorCode,
@@ -31,6 +33,8 @@ export type {
   ApiErrorBody,
   HandoffErrorCode,
   PingRoomErrorInit,
+  QuickActionErrorCode,
+  RequestLimitErrorCode,
   RoomScopedErrorCode,
 } from './errors.js';
 
