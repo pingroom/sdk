@@ -1193,8 +1193,9 @@ class ProfileApi {
  * Live-status streams — a self-updating card on the room members' lock screen.
  *
  * Requires the `pingroom:live:write` scope. Free accounts get a small daily
- * budget of NEW streams; updates and the terminal ping are never charged, so a
- * card can never be quota-blocked into hanging open.
+ * budget of NEW streams; updates and the terminal ping of an open stream are
+ * never charged, so a card can never be quota-blocked into hanging open. A
+ * first ping that is already `done`/`failed` is a new stream and is charged.
  */
 class LiveApi {
   constructor(private readonly http: HttpClient) {}
