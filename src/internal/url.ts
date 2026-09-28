@@ -15,7 +15,11 @@ export function assertSecureUrl(rawUrl: string, allowInsecure: boolean): URL {
   try {
     url = new URL(rawUrl);
   } catch {
-    throw new PingRoomError(`Invalid URL: ${rawUrl}`, { code: 'invalid_url' });
+    // Never echo the input: an incoming-webhook URL carries its secret in the
+    // path, and error messages end up in logs.
+    throw new PingRoomError('Invalid URL (value withheld because it may contain a secret).', {
+      code: 'invalid_url',
+    });
   }
   if (url.protocol === 'https:') {
     return url;
@@ -28,4 +32,22 @@ export function assertSecureUrl(rawUrl: string, allowInsecure: boolean): URL {
       'Use https, or set allowInsecure: true for trusted local development.',
     { code: 'insecure_url' },
   );
+}
+
+/**
+ * Strip a URL out of an error message, keeping only its origin. An
+ * incoming-webhook URL carries its secret in the path, and fetch
+ * implementations (node-fetch, for one) quote the requested URL in their
+ * errors, so a message copied from one must not reach a caller's logs as-is.
+ */
+export function redactUrlInMessage(message: string, url: URL, rawUrl: string): string {
+  const withheld = `${url.origin}/[redacted]`;
+  let out = message;
+  for (const full of [rawUrl, url.href]) {
+    if (full) out = out.split(full).join(withheld);
+  }
+  for (const tail of [`${url.pathname}${url.search}${url.hash}`, url.pathname]) {
+    if (tail.length > 1) out = out.split(tail).join('/[redacted]');
+  }
+  return out;
 }

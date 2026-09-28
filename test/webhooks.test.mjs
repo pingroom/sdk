@@ -311,3 +311,29 @@ test('incoming webhook forwards everyone confirmation and returns partial progre
   assert.deepEqual(sent, { message: 'Confirm', requires_ack: true, ack_mode: 'all' });
   assert.deepEqual(result.action_state, state);
 });
+
+test('sendIncomingWebhook never echoes a malformed webhook URL, which may hold its secret', async () => {
+  const err = await sendIncomingWebhook('not-a-url/secret-SYNTHETIC', { message: 'hi' }).then(
+    () => assert.fail('expected a rejection'),
+    (e) => e,
+  );
+  assert.ok(err instanceof PingRoomError);
+  assert.equal(err.code, 'invalid_url');
+  assert.doesNotMatch(err.message, /secret-SYNTHETIC/);
+});
+
+test('sendIncomingWebhook strips the webhook URL out of a wrapped fetch error', async () => {
+  const url = 'https://example.invalid/webhooks/secret-SYNTHETIC?x=1';
+  const failingFetch = async (requested) => {
+    throw new Error(`request to ${requested} failed, reason: getaddrinfo ENOTFOUND (path /webhooks/secret-SYNTHETIC)`);
+  };
+  const err = await sendIncomingWebhook(url, { message: 'hi' }, { fetch: failingFetch }).then(
+    () => assert.fail('expected a rejection'),
+    (e) => e,
+  );
+  assert.ok(err instanceof PingRoomError);
+  assert.equal(err.code, 'network_error');
+  assert.doesNotMatch(err.message, /secret-SYNTHETIC/);
+  assert.match(err.message, /https:\/\/example\.invalid\/\[redacted\]/);
+  assert.match(err.message, /ENOTFOUND/, 'the useful part of the reason survives');
+});
