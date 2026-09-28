@@ -71,6 +71,18 @@ test('webhook CRUD unwraps lists and preserves flat credentials, nullable fields
   assert.ok(calls.every((call) => call.headers.Authorization === 'Bearer test-token'));
 });
 
+test('webhooks can be created without a preset and an existing preset can be cleared', async () => {
+  const { pr, calls } = clientReturning({ id: 'custom-hook', name: 'Deploys', action_number: null });
+  const independent = { name: 'Deploys', message: 'Deployment complete' };
+  assert.equal((await pr.webhooks.create('AB12', independent)).action_number, null);
+  await pr.webhooks.create('AB12', { ...independent, action_number: null });
+  await pr.webhooks.update('AB12', 'custom-hook', { action_number: null });
+
+  assert.deepEqual(JSON.parse(calls[0].body), independent);
+  assert.deepEqual(JSON.parse(calls[1].body), { ...independent, action_number: null });
+  assert.deepEqual(JSON.parse(calls[2].body), { action_number: null });
+});
+
 test('questions carry retry keys in headers and reject empty keys before sending', async () => {
   const { pr, calls } = clientReturning({ id: 'q1', state: 'pending' });
   const input = { prompt: 'Ship?', options: ['yes', 'no'], idempotencyKey: 'deploy-42' };
@@ -89,7 +101,7 @@ test('questions carry retry keys in headers and reject empty keys before sending
 test('new management and feed APIs remain typed for TypeScript callers', () => {
   const filename = fileURLToPath(new URL('./agent-contract.mts', import.meta.url));
   const source = `
-    import { PingRoom, type AgentNotification, type Webhook, type RoomIconCatalog } from '../dist/index.js';
+    import { PingRoom, sendIncomingWebhook, type AgentNotification, type Webhook, type RoomIconCatalog } from '../dist/index.js';
     const pr = new PingRoom();
     const confirmed = await pr.broadcast('AB12', { message: 'Confirm', requires_ack: true, ack_mode: 'all' });
     await pr.actions.trigger('AB12', 1, { ack_mode: 'any' });
@@ -105,6 +117,12 @@ test('new management and feed APIs remain typed for TypeScript callers', () => {
     const catalog: RoomIconCatalog = await pr.rooms.icons();
     const hook: Webhook = await pr.webhooks.create('AB12', { name: 'Deploys' });
     await pr.webhooks.update('AB12', hook.id, { title: null, regenerate_secret: true });
+    const independent: Webhook = await pr.webhooks.create('AB12', { name: 'Custom', action_number: null });
+    const preset: number | null = independent.action_number;
+    // @ts-expect-error independent webhooks do not always have a numeric preset
+    const requiredPreset: number = independent.action_number;
+    await pr.webhooks.update('AB12', hook.id, { action_number: null });
+    await sendIncomingWebhook(hook.webhook_url, { message: 'Custom content', action: null });
     const question = await pr.questions.ask('AB12', { prompt: 'Ship?', idempotencyKey: 'deploy-42' });
     const notification: string | null | undefined = question.notification_id;
     // @ts-expect-error webhook names are required

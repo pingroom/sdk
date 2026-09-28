@@ -166,6 +166,20 @@ test('sendIncomingWebhook posts JSON and returns the result', async () => {
   });
 });
 
+test('sendIncomingWebhook preserves an explicit null action to bypass a stored preset', async () => {
+  let captured;
+  const payload = { title: 'Deployment', message: 'Version 2 is live', action: null };
+  await sendIncomingWebhook(
+    'https://api.pingroom.io/api/webhooks/AB12/secret',
+    payload,
+    { fetch: async (_url, init) => {
+      captured = JSON.parse(init.body);
+      return new Response('{"success":true,"action":null}');
+    } },
+  );
+  assert.deepEqual(captured, payload);
+});
+
 test('sendIncomingWebhook accepts the public-room Ping text boundaries', async () => {
   let captured;
   const fetchMock = async (_url, init) => {

@@ -366,7 +366,8 @@ export interface CreateWebhookInput {
   color?: string | null;
   sound?: string | null;
   haptic?: string | null;
-  action_number?: number;
+  /** Optional Quick Ping preset. Omit or use null for an independent webhook. */
+  action_number?: number | null;
   enabled?: boolean;
   cooldown_seconds?: number;
 }
@@ -388,7 +389,8 @@ export interface Webhook {
   color: string | null;
   sound: string | null;
   haptic: string | null;
-  action_number: number;
+  /** Null when the webhook uses its own content without a Quick Ping preset. */
+  action_number: number | null;
   enabled: boolean;
   cooldown_seconds: number;
   trigger_count: number;
