@@ -69,6 +69,12 @@ export interface LiveStatus {
   metrics?: LiveStatusMetric[];
   /** Epoch seconds the `countdown` template counts down to. */
   deadline_at?: number;
+  /**
+   * `countdown` only: the timer's original length in seconds. Read from the
+   * first ping only (the server derives `deadline_at - now` when omitted) and
+   * preserved through updates and completion.
+   */
+  duration_seconds?: number;
   /** Epoch seconds; renders a live ETA on `status`/`progress`. */
   eta_at?: number;
   /** The ask, for the `question` template. */
@@ -128,6 +134,8 @@ export interface LiveStatusSnapshot {
   accent_override: string | null;
   eta_at: number | null;
   deadline_at: number | null;
+  /** Original countdown length in seconds; `null` on every other template. */
+  duration_seconds: number | null;
   metrics: LiveStatusMetric[] | null;
   prompt: string | null;
   options: LiveStatusOption[] | null;

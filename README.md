@@ -667,7 +667,7 @@ const snap = await pr.live.get('AB12CD', 'deploy-42');
 if (snap) console.log(snap.template, snap.current_step, snap.updated_at);
 ```
 
-`get()` returns **every** stored field (`state`, `progress`, `message`, `category`, `template`, `agent_id`, `accent_override`, `eta_at`, `deadline_at`, `metrics`, `prompt`, `options`, `left`, `right`, `center`, `steps`, `current_step`) plus `action_state` and `updated_at`. Fields you never set come back as `null`, not omitted.
+`get()` returns **every** stored field (`state`, `progress`, `message`, `category`, `template`, `agent_id`, `accent_override`, `eta_at`, `deadline_at`, `duration_seconds`, `metrics`, `prompt`, `options`, `left`, `right`, `center`, `steps`, `current_step`) plus `action_state` and `updated_at`. Fields you never set come back as `null`, not omitted.
 
 ### Ownership and limits
 
