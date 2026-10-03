@@ -551,7 +551,7 @@ class ActionsApi {
    *
    * Prefer this over looping `update()`. Each single-slot write enqueues its
    * own silent rooms-refresh push, so configuring a room's four Pings one at a
-   * time wakes the owner's device four times inside a few seconds — four of a
+   * time wakes room members' devices four times inside a few seconds — four of a
    * finite daily background-push budget spent on one logical operation.
    *
    * Partial and additive: slots absent from `actions` keep their current
