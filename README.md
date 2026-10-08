@@ -741,10 +741,6 @@ const { tools } = await pr.mcp.listTools();
 const result = await pr.mcp.callTool('broadcast', { invite_code: 'ab12cd', message: 'hi' });
 ```
 
-For redemption over MCP, call `await pr.mcp.redeemCode('AB12CD34EF56')`;
-it returns the MCP tool result envelope. Use `pr.redeemCode()` for the typed
-REST result.
-
 `pr.mcp` is a PingRoom-specific JSON-RPC convenience client, not a general MCP
 host. Cursor, Claude, and other MCP hosts should connect to the hosted endpoint
 directly and use OAuth instead: <https://pingroom.io/connect-mcp.md>.

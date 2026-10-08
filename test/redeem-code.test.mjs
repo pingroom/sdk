@@ -21,14 +21,12 @@ test('redeemCode uses the authenticated account endpoint and preserves the entit
   assert.deepEqual(JSON.parse(calls[0].body), { code: 'AB12CD34EF56' });
 });
 
-test('REST and MCP reject malformed codes without network calls or including the code in errors', () => {
+test('REST rejects malformed codes without network calls or including the code in errors', () => {
   let requests = 0;
   const pr = new PingRoom({ token: 'agent_test', fetch: async () => { requests += 1; } });
   for (const code of ['', null, 123456789012, 'AB12-CD34-EF56', 'AB12 CD34EF56', 'ABCDEFGHIJK', 'ABCDEFGHIJKLM', 'abcdefghijß']) {
-    for (const call of [() => pr.redeemCode(code), () => pr.mcp.redeemCode(code)]) {
-      assert.throws(call, (error) => error instanceof PingRoomError && error.code === 'invalid_request'
-        && error.message === 'The code must contain exactly 12 letters or digits.');
-    }
+    assert.throws(() => pr.redeemCode(code), (error) => error instanceof PingRoomError && error.code === 'invalid_request'
+      && error.message === 'The code must contain exactly 12 letters or digits.');
   }
   assert.equal(requests, 0);
 });
@@ -51,23 +49,4 @@ test('redemption preserves API error status and does not retry a single-use muta
     });
     assert.equal(requests, 1);
   }
-});
-
-test('MCP redemption initializes then calls redeem_code with the normalized code', async () => {
-  const calls = [];
-  const toolResult = { content: [{ type: 'text', text: JSON.stringify(result) }] };
-  const pr = new PingRoom({ token: 'agent_test', fetch: async (_url, init) => {
-    const envelope = JSON.parse(init.body);
-    calls.push({ envelope, headers: init.headers });
-    if (envelope.method === 'notifications/initialized') return new Response(null, { status: 202 });
-    return new Response(JSON.stringify({ jsonrpc: '2.0', id: envelope.id, result:
-      envelope.method === 'initialize'
-        ? { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'PingRoom', version: '1' } }
-        : toolResult,
-    }));
-  } });
-  assert.deepEqual(await pr.mcp.redeemCode(' ab12cd34ef56 '), toolResult);
-  assert.deepEqual(calls.map(({ envelope }) => envelope.method), ['initialize', 'notifications/initialized', 'tools/call']);
-  assert.deepEqual(calls[2].envelope.params, { name: 'redeem_code', arguments: { code: 'AB12CD34EF56' } });
-  assert.ok(calls.every(({ headers }) => headers.Authorization === 'Bearer agent_test'));
 });
