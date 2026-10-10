@@ -756,7 +756,8 @@ export interface ApprovalInput {
 
 export interface Approval {
   id: string;
-  status: 'pending' | 'approved' | 'denied' | 'expired' | (string & {});
+  /** A human answer has status `decided`; inspect `decision` for the chosen option. */
+  status: 'pending' | 'decided' | 'approved' | 'denied' | 'expired' | (string & {});
   question: string;
   title: string | null;
   options: string[];

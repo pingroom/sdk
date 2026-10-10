@@ -416,10 +416,14 @@ const approval = await pr.approvals.request('ab12cd', {
 });
 
 const decided = await pr.approvals.waitForDecision(approval.id);
-if (decided.decision === 'Ship it') {
+if (decided.status === 'decided' && decided.decision === 'Ship it') {
   // proceed
 }
 ```
+
+For a runnable example that binds approval to a file's SHA-256, handles timeouts,
+and refuses a changed artifact, see [release approval](examples/release-approval/README.md).
+The demo runs locally with simulated decisions and needs no account or credentials.
 
 ## Human-in-the-loop questions
 
