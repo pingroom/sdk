@@ -820,6 +820,8 @@ class NotificationsApi {
       for (const n of result.notifications) {
         yield n;
       }
+      // Yield between polls so timer-driven cancellation can run (see ApprovalsApi).
+      await sleep(0, input.signal);
     }
   }
 }
@@ -933,6 +935,8 @@ class QuestionsApi {
       if (question.state !== 'pending') {
         return question;
       }
+      // Yield between polls so timer-driven cancellation can run (see ApprovalsApi).
+      await sleep(0, input.signal);
     }
   }
 
@@ -1019,6 +1023,8 @@ class HandoffsApi {
       if (isHandoffTerminal(handoff)) {
         return handoff;
       }
+      // Yield between polls so timer-driven cancellation can run (see ApprovalsApi).
+      await sleep(0, input.signal);
     }
   }
 
