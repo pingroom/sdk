@@ -874,6 +874,9 @@ class ApprovalsApi {
       if (approval.decided_at !== null || approval.status !== 'pending') {
         return approval;
       }
+      // An injected transport can resolve pending polls immediately. Yield
+      // between them so timer-driven cancellation and deadlines can run.
+      await sleep(0, input.signal);
     }
   }
 }
