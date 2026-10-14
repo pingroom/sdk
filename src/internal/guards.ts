@@ -28,6 +28,23 @@ export function assertMaxLength(value: unknown, max: number, field: string): voi
   }
 }
 
+/**
+ * Bytes a JSON string takes as PHP's default json_encode() writes it, which is
+ * what the server's 8 KB cap measures: every non-ASCII UTF-16 unit becomes a
+ * six-byte `\uXXXX` escape and `/` becomes `\/`. Non-Latin text is several
+ * times larger there than its UTF-8 size.
+ */
+function serverJsonByteLength(json: string): number {
+  let bytes = 0;
+  for (let index = 0; index < json.length; index += 1) {
+    const code = json.charCodeAt(index);
+    if (code > 0x7f) bytes += 6;
+    else if (code === 0x2f) bytes += 2;
+    else bytes += 1;
+  }
+  return bytes;
+}
+
 export function assertStructuredData(data: unknown): void {
   if (data === undefined || data === null) {
     return;
@@ -45,7 +62,7 @@ export function assertStructuredData(data: unknown): void {
   } catch {
     throw new PingRoomError('`data` must be JSON-serializable.', { code: 'invalid_data' });
   }
-  const bytes = new TextEncoder().encode(encoded).length;
+  const bytes = serverJsonByteLength(encoded);
   if (bytes > MAX_DATA_BYTES) {
     throw new PingRoomError(`\`data\` is too large (${bytes} bytes, max ${MAX_DATA_BYTES}).`, { code: 'invalid_data' });
   }
