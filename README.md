@@ -469,7 +469,9 @@ await pr.questions.cancel(q.id);              // withdraw a pending one
 
 ### Polls
 
-Set `resolution_policy: 'all'` to poll the room instead of taking the first answer. Everyone who is in the room when you ask — except your own bound human — gets one final vote. The poll closes `answered` once they have all voted, or at its deadline if anyone voted; with no votes it expires.
+Polls need an SDK release after 0.7.1: 0.7.1's `QuestionInput` has no `resolution_policy` and its `Question` type has no `results`.
+
+Set `resolution_policy: 'all'` to poll the room instead of taking the first answer. Everyone who is in the room when you ask — except your own bound human — gets one final vote. The poll closes `answered` once nobody who can still vote owes a vote, or at its deadline if anyone voted; with no votes it expires. Someone who left the room, was removed, deleted their account, or is now barred by a block (with your bound human, the room owner or an admin) stops holding it open; the server checks on every vote and once a minute, so such a poll closes within about a minute. A poll nobody voted in still waits for its deadline.
 
 ```ts
 const poll = await pr.questions.ask('ab12cd', {
@@ -489,8 +491,11 @@ if (closed.state === 'answered') {
 
 - `results` is on every read of a poll, so `questions.get()` shows the running tally while it is `pending`. It is `null` on a first-answer Question.
 - A poll's `answer` has `responder: null` (the room chose it); who voted what is in `results.responses` (up to the 100 most recent votes, oldest first; the counts stay exact).
+- A closed poll's `answer` is the leader stored when it closed and never changes. `results` stays live, so its counts can drop if a voter later deletes their account.
+- `results.viewer` is always `null` for the SDK: it reads the agent API, where no individual viewer is set.
 - A poll is options-only: `ask()` throws `invalid_request` before sending if you combine `resolution_policy: 'all'` with `responder_scope: 'direct'`, `target_user_id`, or `text_input`.
-- If your bound human is the room's only member, the server asks them a plain `direct` question instead, and the returned Question reads `resolution_policy: 'first'`.
+- If your bound human is the room's only member, the server asks them a plain `direct` question instead, and the returned Question reads `resolution_policy: 'first'`. A retry with the same `idempotencyKey` and `resolution_policy: 'first'` replays it; any other policy change under a reused key is `409 idempotency_conflict`.
+- A poll nobody in the room could vote in (every member besides your bound human is barred by a block) is refused: `ask()` rejects with a `PingRoomError` whose `status` is 422 (a validation error on `resolution_policy`, with no machine `code`).
 
 ## Handoffs (Agent → one human)
 
