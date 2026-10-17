@@ -427,7 +427,7 @@ The demo runs locally with simulated decisions and needs no account or credentia
 
 ## Human-in-the-loop questions
 
-A **question** is the general form of an approval: 2–4 options (or a short typed answer), delivered as a push with tappable buttons, resolving to exactly one answer — first tap wins. Reach for `pr.questions` when you need more than yes/no, a typed reply, or want *anyone in the room* to answer.
+A **question** is the general form of an approval: 2–4 options (or a short typed answer), delivered as a push with tappable buttons, resolving to exactly one answer — first tap wins. Reach for `pr.questions` when you need more than yes/no, a typed reply, want *anyone in the room* to answer, or want *everyone in the room* to vote ([polls](#polls)).
 
 ```ts
 // Ask — omit `options` for a binary Approve/Deny; ttl defaults to 1h (30s–24h).
@@ -466,6 +466,31 @@ await pr.questions.cancel(q.id);              // withdraw a pending one
 ```
 
 > `pr.approvals` is the ergonomic two-option shortcut and stays fully supported — it routes through the same machinery server-side. Use it for plain yes/no gates; use `pr.questions` for everything richer.
+
+### Polls
+
+Set `resolution_policy: 'all'` to poll the room instead of taking the first answer. Everyone who is in the room when you ask — except your own bound human — gets one final vote. The poll closes `answered` once they have all voted, or at its deadline if anyone voted; with no votes it expires.
+
+```ts
+const poll = await pr.questions.ask('ab12cd', {
+  prompt: 'Which release name?',
+  options: ['otter', 'heron'],
+  resolution_policy: 'all', // implies responder_scope: 'room'
+  ttl: 3600,
+});
+
+const closed = await pr.questions.waitForAnswer(poll.id);
+if (closed.state === 'answered') {
+  console.log(closed.answer?.value ?? 'tie');            // the leading option, or null on a tie
+  for (const o of closed.results?.options ?? []) console.log(o.value, o.count);
+  console.log(`${closed.results?.response_count} of ${closed.results?.audience_count} voted`);
+}
+```
+
+- `results` is on every read of a poll, so `questions.get()` shows the running tally while it is `pending`. It is `null` on a first-answer Question.
+- A poll's `answer` has `responder: null` (the room chose it); who voted what is in `results.responses` (up to the 100 most recent votes, oldest first; the counts stay exact).
+- A poll is options-only: `ask()` throws `invalid_request` before sending if you combine `resolution_policy: 'all'` with `responder_scope: 'direct'`, `target_user_id`, or `text_input`.
+- If your bound human is the room's only member, the server asks them a plain `direct` question instead, and the returned Question reads `resolution_policy: 'first'`.
 
 ## Handoffs (Agent → one human)
 

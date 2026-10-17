@@ -98,6 +98,43 @@ test('questions carry retry keys in headers and reject empty keys before sending
   assert.equal(calls.length, 2);
 });
 
+test('a poll sends resolution_policy and returns the tally untouched', async () => {
+  const results = {
+    audience_count: 3,
+    response_count: 2,
+    options: [{ value: 'pizza', label: 'Pizza', count: 2 }, { value: 'tacos', label: 'Tacos', count: 0 }],
+    responses: [{ value: 'pizza', label: 'Pizza', responder: { id: 'u1', display_name: 'Sam', profile_image_url: null, emoji: null, color: null }, answered_at: '2026-10-17T10:31:04+00:00' }],
+    viewer: null,
+  };
+  const { pr, calls } = clientReturning({ id: 'q1', kind: 'question', state: 'answered', resolution_policy: 'all', answer: null, results });
+  const poll = await pr.questions.ask('AB12', { prompt: 'Lunch?', options: ['pizza', 'tacos'], resolution_policy: 'all', ttl: 600 });
+  assert.deepEqual(JSON.parse(calls[0].body), { prompt: 'Lunch?', options: ['pizza', 'tacos'], resolution_policy: 'all', ttl: 600 });
+  assert.equal(calls[0].url.pathname, '/api/agent/rooms/AB12/questions');
+  assert.equal(poll.resolution_policy, 'all');
+  assert.equal(poll.answer, null);
+  assert.deepEqual(poll.results, results);
+  assert.deepEqual(await pr.questions.waitForAnswer('q1'), { id: 'q1', kind: 'question', state: 'answered', resolution_policy: 'all', answer: null, results });
+});
+
+test('a poll combined with a direct scope, a target or a typed answer fails before sending', async () => {
+  const { pr, calls } = clientReturning({ id: 'q1', state: 'pending' });
+  for (const extra of [
+    { responder_scope: 'direct' },
+    { target_user_id: '0190a2b4-0000-7000-8000-000000000001' },
+    { text_input: { placeholder: 'Other?' } },
+  ]) {
+    assert.throws(
+      () => pr.questions.ask('AB12', { prompt: 'Lunch?', options: ['pizza', 'tacos'], resolution_policy: 'all', ...extra }),
+      (error) => error instanceof PingRoomError && error.code === 'invalid_request',
+    );
+  }
+  assert.equal(calls.length, 0);
+  // A room-scope poll and a first-answer question with the same extras are left to the server.
+  await pr.questions.ask('AB12', { prompt: 'Lunch?', resolution_policy: 'all', responder_scope: 'room' });
+  await pr.questions.ask('AB12', { prompt: 'Why?', resolution_policy: 'first', text_input: { placeholder: 'Reason' } });
+  assert.equal(calls.length, 2);
+});
+
 test('new management and feed APIs remain typed for TypeScript callers', () => {
   const filename = fileURLToPath(new URL('./agent-contract.mts', import.meta.url));
   const source = `
@@ -125,6 +162,14 @@ test('new management and feed APIs remain typed for TypeScript callers', () => {
     await sendIncomingWebhook(hook.webhook_url, { message: 'Custom content', action: null });
     const question = await pr.questions.ask('AB12', { prompt: 'Ship?', idempotencyKey: 'deploy-42' });
     const notification: string | null | undefined = question.notification_id;
+    const poll = await pr.questions.ask('AB12', { prompt: 'Lunch?', options: ['pizza', 'tacos'], resolution_policy: 'all' });
+    const audience: number | undefined = poll.results?.audience_count;
+    const tally: number | undefined = poll.results?.options[0]?.count;
+    const voter: string | null | undefined = poll.results?.responses[0]?.responder.display_name;
+    const asked: boolean | undefined = poll.results?.viewer?.asked;
+    const policy: string = poll.resolution_policy;
+    // @ts-expect-error quorum is reserved, not an accepted policy
+    pr.questions.ask('AB12', { prompt: 'Lunch?', resolution_policy: 'quorum' });
     // @ts-expect-error webhook names are required
     pr.webhooks.create('AB12', { enabled: true });
     // @ts-expect-error limits are numeric

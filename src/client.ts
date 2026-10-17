@@ -892,10 +892,15 @@ class ApprovalsApi {
 class QuestionsApi {
   constructor(private readonly http: HttpClient) {}
 
-  /** Ask a Question in a room; returns the pending Question (id + computed expiry). */
+  /**
+   * Ask a Question in a room; returns the pending Question (id + computed
+   * expiry). Pass `resolution_policy: 'all'` to poll the room: everyone asked
+   * votes once, and `results` carries the tally on every read.
+   */
   ask(inviteCode: string, input: QuestionInput): Promise<Question> {
     requireNonEmpty(input.prompt, 'prompt');
     assertStructuredData(input.data);
+    assertPollShape(input);
     const { idempotencyKey, ...body } = input;
     if (idempotencyKey !== undefined) {
       requireNonEmpty(idempotencyKey, 'idempotencyKey');
@@ -924,7 +929,8 @@ class QuestionsApi {
   /**
    * Block until the human answers (or the question expires/cancels), looping
    * wait() under the hood. Returns the resolved Question — inspect `state` and
-   * `answer.value` to branch.
+   * `answer.value` to branch. A poll returns once it closes; its `answer` is the
+   * leading option, or `null` on a tie, and `results` holds the tally.
    */
   async waitForAnswer(questionId: string, input: { signal?: AbortSignal } = {}): Promise<Question> {
     for (;;) {
@@ -951,6 +957,26 @@ class QuestionsApi {
   /** Withdraw a still-pending Question (409 if it already resolved). */
   cancel(questionId: string): Promise<Question> {
     return this.http.request('POST', `/api/agent/questions/${enc(questionId)}/cancel`, { body: {} });
+  }
+}
+
+/**
+ * A poll asks the whole room and counts option votes, so the server refuses it
+ * (422 on `resolution_policy`) alongside a direct scope, a named target, or a
+ * typed answer. Fail before the request instead.
+ */
+function assertPollShape(input: QuestionInput): void {
+  if (input.resolution_policy !== 'all') return;
+  const target = input.target_user_id as unknown;
+  if (
+    input.responder_scope === 'direct'
+    || (target !== undefined && target !== null && target !== '')
+    || (input.text_input !== undefined && input.text_input !== null)
+  ) {
+    throw new PingRoomError(
+      "A poll (`resolution_policy: 'all'`) asks the whole room with options only; it cannot use `responder_scope: 'direct'`, `target_user_id`, or `text_input`.",
+      { code: 'invalid_request' },
+    );
   }
 }
 
