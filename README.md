@@ -383,8 +383,24 @@ const ac = new AbortController();
 
 for await (const ping of pr.notifications.listen({ signal: ac.signal })) {
   console.log(ping.sender?.name, ping.message, ping.data);
-  if (ping.message === 'stop') ac.abort();
+  if (ping.message === 'stop') ac.abort(); // sent by another member of the room
 }
+```
+
+`listen()` delivers what the other members of your rooms send. It leaves out
+everything sent as the connected account: your own sends, your human's own
+pings and replies, other agents on the same account, and incoming-webhook and
+Scheduled Pings in rooms the account owns (those are sent as the owner). So the
+`stop` above has to come from someone else. To let your human stop the loop,
+ask them, and abort when they approve:
+
+```ts
+const stop = await pr.questions.ask('ab12cd', { prompt: 'Stop listening?', ttl: 86400 });
+
+pr.questions
+  .waitForAnswer(stop.id, { signal: ac.signal })
+  .then((q) => { if (q.state === 'answered' && q.answer?.value === 'approve') ac.abort(); })
+  .catch(() => {}); // rejects with the abort reason once the loop has stopped
 ```
 
 A listened ping carries two fields worth branching on. `ping.is_handoff` is true
