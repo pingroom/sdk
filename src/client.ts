@@ -7,6 +7,7 @@ import {
   assertStructuredData,
   MAX_PING_TITLE_LENGTH,
   MAX_PUBLIC_PING_MESSAGE_LENGTH,
+  normalizeIdempotencyKey,
   normalizeRedeemCode,
   requireNonEmpty,
   requirePresentString,
@@ -77,6 +78,7 @@ import type {
   WaitApprovalInput,
   WaitHandoffInput,
   WaitForAcknowledgementInput,
+  WaitForOutcomeOptions,
   WaitInput,
   WaitQuestionInput,
   WaitResult,
@@ -102,7 +104,13 @@ const DEFAULT_INBOX_ACTIVATION_TIMEOUT_MS = 120_000;
  * would otherwise let one loop exhaust it.
  */
 const MIN_HANDOFF_POLL_INTERVAL_MS = 2100;
-const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+/**
+ * Minimum spacing between the starts of two approval or question wait polls.
+ * The server normally holds each one, but a proxy or a zero hold that answers
+ * `pending` at once would otherwise spin the loop and keep the human's shared
+ * 30-per-minute wait bucket exhausted. Same floor as the CLI.
+ */
+const MIN_WAIT_POLL_INTERVAL_MS = 1000;
 
 function envBaseUrl(): string | undefined {
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
@@ -122,7 +130,7 @@ function enc(segment: string): string {
 /**
  * Lift the SDK-only `idempotencyKey` out of an input and into the
  * `Idempotency-Key` header the server reads. The server trims the key and
- * accepts 1–255 characters.
+ * accepts 1–255 characters; as a header it must also be printable ASCII.
  */
 function splitIdempotencyKey<T extends { idempotencyKey?: string }>(
   input: T,
@@ -131,9 +139,14 @@ function splitIdempotencyKey<T extends { idempotencyKey?: string }>(
   if (idempotencyKey === undefined) {
     return { body };
   }
-  requireNonEmpty(idempotencyKey, 'idempotencyKey');
-  assertMaxLength(idempotencyKey, MAX_IDEMPOTENCY_KEY_LENGTH, 'idempotencyKey');
-  return { body, headers: { 'Idempotency-Key': idempotencyKey } };
+  return { body, headers: { 'Idempotency-Key': normalizeIdempotencyKey(idempotencyKey) } };
+}
+
+/** `onRetry`, when given, must be callable: a TypeError mid-outage would hide the real failure. */
+function assertOnRetry(onRetry: unknown): void {
+  if (onRetry !== undefined && typeof onRetry !== 'function') {
+    throw new PingRoomError('`onRetry` must be a function.', { code: 'invalid_request' });
+  }
 }
 
 /**
@@ -977,17 +990,26 @@ class ApprovalsApi {
 
   /**
    * Block until the human decides (or the request expires or is cancelled),
-   * looping wait() under the hood. A response that is not this approval in a
-   * known status rejects with `invalid_response`. Network failures, 429 and 5xx
-   * are retried with backoff (honouring `retryAfter`) until `signal` aborts.
+   * looping wait() under the hood, with polls started at least 1 s apart. A
+   * response that is not this approval in a known status rejects with
+   * `invalid_response`. Network failures, 429 and 5xx are retried with backoff
+   * (honouring `retryAfter`), and reported to `onRetry`, until `signal` aborts
+   * or the outage outlasts the approval's `expires_at` by 5 minutes (15 minutes
+   * of failures while no `expires_at` has been read); that rejects with
+   * `unavailable`. See {@link WaitForOutcomeOptions}.
    */
-  async waitForDecision(approvalId: string, input: { signal?: AbortSignal } = {}): Promise<Approval> {
+  async waitForDecision(approvalId: string, input: WaitForOutcomeOptions = {}): Promise<Approval> {
     requireNonEmpty(approvalId, 'approvalId');
+    assertOnRetry(input.onRetry);
     return pollUntilSettled({
       poll: () => this.wait(approvalId, input.signal ? { signal: input.signal } : {}),
       validate: (value) => validateApprovalWait(value, approvalId),
       settled: (approval) => approval.status !== 'pending',
+      expiresAt: (approval) => approval.expires_at,
+      what: `approval ${approvalId}`,
+      minIntervalMs: MIN_WAIT_POLL_INTERVAL_MS,
       ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.onRetry ? { onRetry: input.onRetry } : {}),
     });
   }
 }
@@ -1037,17 +1059,25 @@ class QuestionsApi {
    * `answer.value` to branch. A poll returns once it closes; its `answer` is the
    * leading option, or `null` on a tie, and `results` holds the tally.
    *
-   * A response that is not this Question in a known state rejects with
-   * `invalid_response`. Network failures, 429 and 5xx are retried with backoff
-   * (honouring `retryAfter`) until `signal` aborts.
+   * Polls start at least 1 s apart. A response that is not this Question in a
+   * known state rejects with `invalid_response`. Network failures, 429 and 5xx
+   * are retried with backoff (honouring `retryAfter`), and reported to
+   * `onRetry`, until `signal` aborts or the outage outlasts the Question's
+   * `expires_at` by 5 minutes (15 minutes of failures while no `expires_at` has
+   * been read); that rejects with `unavailable`. See {@link WaitForOutcomeOptions}.
    */
-  async waitForAnswer(questionId: string, input: { signal?: AbortSignal } = {}): Promise<Question> {
+  async waitForAnswer(questionId: string, input: WaitForOutcomeOptions = {}): Promise<Question> {
     requireNonEmpty(questionId, 'questionId');
+    assertOnRetry(input.onRetry);
     return pollUntilSettled({
       poll: () => this.wait(questionId, input.signal ? { signal: input.signal } : {}),
       validate: (value) => validateQuestionWait(value, questionId),
       settled: (question) => question.state !== 'pending',
+      expiresAt: (question) => question.expires_at,
+      what: `question ${questionId}`,
+      minIntervalMs: MIN_WAIT_POLL_INTERVAL_MS,
       ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.onRetry ? { onRetry: input.onRetry } : {}),
     });
   }
 
@@ -1147,16 +1177,23 @@ class HandoffsApi {
    * Polls start at least 2.1 s apart, so a short `timeout` stays under the
    * route's 30-per-minute limit. A response that is not this handoff in a
    * known state rejects with `invalid_response`. Network failures, 429 and 5xx
-   * are retried with backoff (honouring `retryAfter`) until `signal` aborts.
+   * are retried with backoff (honouring `retryAfter`), and reported to
+   * `onRetry`, until `signal` aborts or the outage outlasts the handoff's
+   * `expires_at` by 5 minutes (15 minutes of failures while no `expires_at` has
+   * been read); that rejects with `unavailable`. See {@link WaitForOutcomeOptions}.
    */
-  async waitForResult(id: string, input: WaitHandoffInput = {}): Promise<Handoff> {
+  async waitForResult(id: string, input: WaitHandoffInput & WaitForOutcomeOptions = {}): Promise<Handoff> {
     requireNonEmpty(id, 'id');
+    assertOnRetry(input.onRetry);
     return pollUntilSettled({
       poll: () => this.wait(id, input),
       validate: (value) => validateHandoffWait(value, id),
       settled: isHandoffTerminal,
+      expiresAt: (handoff) => handoff.expires_at,
+      what: `handoff ${id}`,
       minIntervalMs: MIN_HANDOFF_POLL_INTERVAL_MS,
       ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.onRetry ? { onRetry: input.onRetry } : {}),
     });
   }
 
@@ -1195,7 +1232,7 @@ class HandoffsApi {
     });
     return this.http.request('POST', '/api/agent/handoffs', {
       body,
-      ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
+      ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': normalizeIdempotencyKey(input.idempotencyKey) } } : {}),
     });
   }
 }

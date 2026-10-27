@@ -138,6 +138,8 @@ export interface PingRoomErrorInit {
   code?: string | null;
   retryAfter?: number | null;
   body?: unknown;
+  /** The underlying failure, exposed as the standard `error.cause`. */
+  cause?: unknown;
 }
 
 export class PingRoomError extends Error {
@@ -157,6 +159,9 @@ export class PingRoomError extends Error {
     this.code = init.code ?? null;
     this.retryAfter = init.retryAfter ?? null;
     this.body = init.body ?? null;
+    if (init.cause !== undefined) {
+      (this as { cause?: unknown }).cause = init.cause;
+    }
     Object.setPrototypeOf(this, new.target.prototype);
   }
 

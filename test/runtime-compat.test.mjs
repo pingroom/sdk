@@ -95,3 +95,37 @@ for (const [label, respond] of redirects) {
     assert.equal(requests, 3);
   });
 }
+
+// node-fetch (v2/v3) is a common `fetch:` option on older Node. Its manual
+// redirect is the 3xx itself, but `body` is a Node Readable with no cancel().
+// Calling cancel() unguarded threw a TypeError that surfaced as a retryable
+// network_error, so the wait loops re-requested a permanent redirect forever.
+test('a redirect from a node-fetch-shaped response is still redirect_refused, and a wait does not retry it', async () => {
+  const { Readable } = await import('node:stream');
+  let requests = 0;
+  const nodeFetchLike = async () => {
+    requests += 1;
+    const body = Readable.from([]);
+    assert.equal(typeof body.cancel, 'undefined');
+    return {
+      type: 'default', status: 302, ok: false, redirected: false, url: '',
+      headers: new Headers({ Location: 'https://elsewhere.invalid/' }), body, text: async () => '',
+    };
+  };
+  const refused = (error) => error instanceof PingRoomError && error.code === 'redirect_refused' && error.status === 302;
+  const pr = new PingRoom({ token: 'fixture-token', fetch: nodeFetchLike });
+  await assert.rejects(pr.rooms.list(), refused);
+  await assert.rejects(sendIncomingWebhook(HOOK, { message: 'hi' }, { fetch: nodeFetchLike }), refused);
+  await assert.rejects(pr.approvals.waitForDecision('appr-1'), refused);
+  assert.equal(requests, 3, 'a refused redirect is permanent; the wait must not poll it again');
+});
+
+test('a body whose cancel() throws or returns a non-promise does not mask the refusal', async () => {
+  for (const cancel of [() => { throw new Error('boom'); }, () => undefined, () => 'not a promise']) {
+    const pr = new PingRoom({
+      token: 'fixture-token',
+      fetch: async () => ({ type: 'default', status: 307, ok: false, headers: new Headers(), body: { cancel }, text: async () => '' }),
+    });
+    await assert.rejects(pr.rooms.list(), (error) => error instanceof PingRoomError && error.code === 'redirect_refused');
+  }
+});

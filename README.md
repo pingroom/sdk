@@ -50,7 +50,10 @@ A send that times out may still have been delivered. Pass an `idempotencyKey`
 to `broadcast()`, `actions.trigger()`, `approvals.request()` or
 `questions.ask()` and reuse the same key when you retry: the server replays
 the first result instead of pinging the human twice. The SDK sends it as the
-`Idempotency-Key` header (1–255 characters), never in the body.
+`Idempotency-Key` header, never in the body. A key is 1–255 printable ASCII
+characters, spaces included, and surrounding whitespace is trimmed as the
+server does. Anything else, such as an emoji or Cyrillic, is refused before
+sending with `invalid_request`, because it cannot travel as a header.
 
 ```ts
 await pr.broadcast('ab12cd', { message: 'Deploy shipped ✅', idempotencyKey: 'deploy-1.4.0-shipped' });
@@ -465,8 +468,26 @@ else, such as an HTML page from a proxy, `{}`, or another approval, rejects with
 `invalid_response` instead of being returned as an outcome. The wait routes
 share a 30-requests-per-minute limit per human, so these loops retry a 429
 after its `retryAfter`, and retry network errors and 5xx with a backoff capped
-at 30 s. They keep waiting until the request resolves or your `AbortSignal`
-fires; pass one to bound the wait.
+at 30 s. Approval and question polls start at least 1 s apart, and handoff
+polls 2.1 s apart, even if something in between answers `pending` at once.
+
+The retries are bounded without a signal. Once only failures have come back
+since the last valid response, a wait gives up 5 minutes after the last
+`expires_at` it read, or after 15 minutes of unbroken failures if it has not
+read one yet. It then rejects with code `unavailable`, and the last failure as
+`error.cause`. The CLI uses the same bound. Pass `onRetry(error, attempt)` to
+see each retry (`attempt` counts consecutive failures from 1), and an
+`AbortSignal` to stop sooner. Throwing from `onRetry` ends the wait with that
+error.
+
+```ts
+const decided = await pr.approvals.waitForDecision(approval.id, {
+  signal: AbortSignal.timeout(30 * 60_000),
+  onRetry: (err, attempt) => {
+    if (attempt === 3) console.warn(`PingRoom unreachable (${err.status || err.code}); still waiting`);
+  },
+});
+```
 
 For a runnable example that binds approval to a file's SHA-256, handles timeouts,
 and refuses a changed artifact, see [release approval](examples/release-approval/README.md).
@@ -868,7 +889,7 @@ try {
 }
 ```
 
-The SDK also raises a few client-side codes: `network_error` and `timeout` (status 0), `redirect_refused` when the API answers with a redirect (the SDK never follows one, so a token, upload or webhook body cannot be forwarded to another origin), `invalid_response` when a wait loop receives something that is not the requested approval, Question or handoff, and `invalid_request` for input refused before sending.
+The SDK also raises a few client-side codes: `network_error` and `timeout` (status 0), `redirect_refused` when the API answers with a redirect (the SDK never follows one, so a token, upload or webhook body cannot be forwarded to another origin), `invalid_response` when a wait loop receives something that is not the requested approval, Question or handoff, `unavailable` when a wait loop stops retrying an unreachable API (see [approvals](#human-in-the-loop-approvals); the last failure is `error.cause`), and `invalid_request` for input refused before sending, including an `idempotencyKey` that is not 1–255 printable ASCII characters.
 
 The coded vocabulary is exported both as types and as runtime arrays, one per
 surface, so you can branch exhaustively:

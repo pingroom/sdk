@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { format, inspect } from 'node:util';
 import { HttpClient } from '../dist/http.js';
-import { PingRoom, PingRoomError } from '../dist/index.js';
+import { PingRoom, PingRoomError, sendIncomingWebhook } from '../dist/index.js';
 
 const TOKEN = 'agt_live_fixture_credential_5f2c9e';
 
@@ -96,7 +96,59 @@ for (const send of idempotentSends) {
     await send.send(pr, { idempotencyKey: 'k'.repeat(255) });
     assert.equal(calls.length, 1);
   });
+
+  test(`${send.name} refuses a key that cannot travel as a header as invalid_request, not network_error`, async () => {
+    // fetch throws a TypeError on a character outside Latin-1, which used to
+    // surface as a retryable network_error that every retry repeated.
+    const { calls, fetchImpl } = recording();
+    const pr = new PingRoom({ token: 't', fetch: fetchImpl });
+    for (const idempotencyKey of ['deploy-✅', 'ключ', 'café', 'line\nbreak', 'tab\there', 'nul\u0000inside', 'del\u007f', 42]) {
+      await assert.rejects(
+        async () => send.send(pr, { idempotencyKey }),
+        (error) => error instanceof PingRoomError && error.code === 'invalid_request' && /idempotencyKey/.test(error.message),
+        JSON.stringify(idempotencyKey),
+      );
+    }
+    assert.equal(calls.length, 0);
+  });
+
+  test(`${send.name} accepts interior spaces and trims the ends the way the server does`, async () => {
+    const { calls, fetchImpl } = recording(() => ({ body: { id: 'x' } }));
+    const pr = new PingRoom({ token: 't', fetch: fetchImpl });
+    await send.send(pr, { idempotencyKey: 'deploy 1.4.0 abc123' });
+    await send.send(pr, { idempotencyKey: ' \t deploy-2\n' });
+    await send.send(pr, { idempotencyKey: ` ${'k'.repeat(255)} ` });
+    assert.equal(calls[0].init.headers['Idempotency-Key'], 'deploy 1.4.0 abc123');
+    assert.equal(calls[1].init.headers['Idempotency-Key'], 'deploy-2');
+    assert.equal(calls[2].init.headers['Idempotency-Key'], 'k'.repeat(255));
+    // Every printable ASCII character is accepted.
+    const printable = Array.from({ length: 0x7f - 0x21 }, (_, i) => String.fromCharCode(0x21 + i)).join('');
+    await send.send(pr, { idempotencyKey: `a ${printable}` });
+    assert.equal(calls[3].init.headers['Idempotency-Key'], `a ${printable}`);
+  });
 }
+
+test('handoff creates and incoming webhooks apply the same header-safe key rule', async () => {
+  const { calls, fetchImpl } = recording(() => ({ body: { id: 'h1', kind: 'ack', state: 'open', success: true } }));
+  const pr = new PingRoom({ token: 't', fetch: fetchImpl });
+  const invalid = (error) => error instanceof PingRoomError && error.code === 'invalid_request' && /idempotencyKey/.test(error.message);
+  for (const idempotencyKey of ['deploy-✅', 'k'.repeat(256), '   ']) {
+    await assert.rejects(async () => pr.handoffs.requestAck({ prompt: 'Ship?', idempotencyKey }), invalid);
+    await assert.rejects(async () => pr.handoffs.ask({ prompt: 'Ship?', options: ['a', 'b'], idempotencyKey }), invalid);
+    await assert.rejects(
+      sendIncomingWebhook('https://api.pingroom.invalid/api/webhook/s', { message: 'hi' }, { fetch: fetchImpl, idempotencyKey }),
+      invalid,
+    );
+  }
+  assert.equal(calls.length, 0);
+  await pr.handoffs.requestAck({ prompt: 'Ship?', idempotencyKey: ' deploy 42 ' });
+  await sendIncomingWebhook('https://api.pingroom.invalid/api/webhook/s', { message: 'hi' }, { fetch: fetchImpl, idempotencyKey: 'build 42' });
+  // An empty key still means "no key" on these two, as before.
+  await pr.handoffs.requestAck({ prompt: 'Ship?', idempotencyKey: '' });
+  assert.equal(calls[0].init.headers['Idempotency-Key'], 'deploy 42');
+  assert.equal(calls[1].init.headers['Idempotency-Key'], 'build 42');
+  assert.equal('Idempotency-Key' in calls[2].init.headers, false);
+});
 
 // --- SDK-08: dot segments and empty path parameters ------------------------
 

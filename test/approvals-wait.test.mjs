@@ -70,7 +70,8 @@ test('immediately pending approval polls respect the release gate deadline witho
     });
     try {
       await releaseWithApproval({
-        client, room: 'DEMO', artifactPath: ${JSON.stringify(artifactPath)}, destination: 'test-staging', timeoutMs: 500,
+        // Approval polls start at least 1 s apart, so 1.5 s fits two of them.
+        client, room: 'DEMO', artifactPath: ${JSON.stringify(artifactPath)}, destination: 'test-staging', timeoutMs: 1500,
         execute: async () => { executions++; },
       });
       throw new Error('pending approval unexpectedly released');

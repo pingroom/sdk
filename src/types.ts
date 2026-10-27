@@ -6,6 +6,8 @@
  * SDK-only knobs (timeouts, signals, callbacks) use camelCase.
  */
 
+import type { PingRoomError } from './errors.js';
+
 /** A plain JSON object — the shape the API accepts for structured `data`. */
 export type JsonObject = Record<string, unknown>;
 
@@ -491,7 +493,8 @@ export interface PingInput {
    */
   ack_timeout_seconds?: number | null;
   /**
-   * Sent as the `Idempotency-Key` header (1–255 characters), never in the body.
+   * Sent as the `Idempotency-Key` header (1–255 printable ASCII characters,
+   * spaces allowed), never in the body.
    * Reuse the same key when retrying after a timeout or network error: the
    * server replays the first result instead of sending the ping again.
    */
@@ -594,7 +597,8 @@ export interface TriggerInput {
    */
   quick_action_id?: string;
   /**
-   * Sent as the `Idempotency-Key` header (1–255 characters), never in the body.
+   * Sent as the `Idempotency-Key` header (1–255 printable ASCII characters,
+   * spaces allowed), never in the body.
    * Reuse the same key when retrying after a timeout or network error: the
    * server replays the first result instead of firing the press again.
    */
@@ -817,7 +821,8 @@ export interface ApprovalInput {
   data?: JsonObject;
   ttl?: number;
   /**
-   * Sent as the `Idempotency-Key` header (1–255 characters), never in the body.
+   * Sent as the `Idempotency-Key` header (1–255 printable ASCII characters,
+   * spaces allowed), never in the body.
    * Reuse the same key when retrying after a timeout or network error: the
    * server replays the first result instead of asking the human a second time.
    */
@@ -848,6 +853,27 @@ export interface WaitApprovalInput {
   /** Seconds the server holds the connection (0–30, default 20). */
   timeout?: number;
   signal?: AbortSignal;
+}
+
+/**
+ * Options for the blocking waits: `approvals.waitForDecision()`,
+ * `questions.waitForAnswer()` and `handoffs.waitForResult()`.
+ *
+ * Network errors, request timeouts, 429 and 5xx are retried with backoff. The
+ * retries stop with `PingRoomError` code `unavailable` (the last failure as
+ * its `cause`) once only failures have come back since the last valid
+ * response and the last-seen `expires_at` is more than 5 minutes past, or,
+ * before any `expires_at` was seen, after 15 minutes of unbroken failures.
+ */
+export interface WaitForOutcomeOptions {
+  /** Abort to stop waiting; the wait rejects with the signal's reason. */
+  signal?: AbortSignal;
+  /**
+   * Called before each retry of a transient failure, with that failure and
+   * the number of consecutive failures so far (1 on the first). Throwing from
+   * it ends the wait with the thrown error.
+   */
+  onRetry?: (error: PingRoomError, attempt: number) => void;
 }
 
 // --- questions ------------------------------------------------------------
@@ -942,7 +968,10 @@ export interface QuestionInput {
   reply_to?: string;
   /** Ordered ids from `attachments.upload()` (max 4). Same single-use rules as PingInput. */
   attachment_ids?: string[];
-  /** Reuse this key when retrying the same question creation. */
+  /**
+   * Sent as the `Idempotency-Key` header (1–255 printable ASCII characters,
+   * spaces allowed). Reuse this key when retrying the same question creation.
+   */
   idempotencyKey?: string;
 }
 
@@ -1195,7 +1224,8 @@ export interface RequestAckInput {
   /**
    * Idempotency key — same key + same body replays the original resource; a
    * different body for the same key returns a 409 `idempotency_conflict`.
-   * Reuse it verbatim on network retries.
+   * Reuse it verbatim on network retries. 1–255 printable ASCII characters
+   * (spaces allowed); an empty string sends no key.
    */
   idempotencyKey?: string;
 }

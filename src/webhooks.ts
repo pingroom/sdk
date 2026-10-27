@@ -20,6 +20,7 @@ import {
   assertStructuredData,
   MAX_PING_TITLE_LENGTH,
   MAX_PUBLIC_PING_MESSAGE_LENGTH,
+  normalizeIdempotencyKey,
 } from './internal/guards.js';
 import { assertSecureUrl, redactUrlInMessage, refuseRedirect } from './internal/url.js';
 import type { LiveStatus } from './liveStatus.js';
@@ -150,7 +151,11 @@ export interface IncomingWebhookPayload {
 }
 
 export interface SendIncomingWebhookOptions {
-  /** Sent as the Idempotency-Key header; identical keys within ~1h replay the first result. */
+  /**
+   * Sent as the Idempotency-Key header; identical keys within ~1h replay the
+   * first result. 1–255 printable ASCII characters (spaces allowed), else
+   * `invalid_request` before sending.
+   */
   idempotencyKey?: string;
   timeoutMs?: number;
   fetch?: FetchLike;
@@ -225,7 +230,7 @@ export async function sendIncomingWebhook(
     'User-Agent': `pingroom-sdk/${VERSION}`,
   };
   if (options.idempotencyKey) {
-    headers['Idempotency-Key'] = options.idempotencyKey;
+    headers['Idempotency-Key'] = normalizeIdempotencyKey(options.idempotencyKey);
   }
 
   const fetchImpl = options.fetch ?? defaultFetch();

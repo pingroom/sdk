@@ -77,6 +77,32 @@ export function assertActionNumber(n: unknown): void {
   }
 }
 
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+/** PHP trim()'s default set: what the server strips from both ends of a key. */
+const SERVER_TRIM = /^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g;
+
+/**
+ * Normalize an idempotency key the way the server reads it
+ * (`RequestIdempotency::keyFrom`): trimmed, then 1–255 characters. It travels
+ * as the `Idempotency-Key` header, so it must also be printable ASCII (space
+ * included): fetch throws on a character outside Latin-1, which surfaced as a
+ * retryable `network_error` that every retry repeated, and a Latin-1 byte above
+ * 0x7E reaches the server as invalid UTF-8.
+ */
+export function normalizeIdempotencyKey(value: unknown, field = 'idempotencyKey'): string {
+  if (typeof value !== 'string') {
+    throw new PingRoomError(`\`${field}\` must be a string.`, { code: 'invalid_request' });
+  }
+  const key = value.replace(SERVER_TRIM, '');
+  if (key.length < 1 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH || !/^[\x20-\x7E]+$/.test(key)) {
+    throw new PingRoomError(
+      `\`${field}\` must be 1–${MAX_IDEMPOTENCY_KEY_LENGTH} printable ASCII characters (letters, digits, punctuation or spaces).`,
+      { code: 'invalid_request' },
+    );
+  }
+  return key;
+}
+
 export function requireNonEmpty(value: unknown, field: string): void {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new PingRoomError(`\`${field}\` is required.`, { code: 'invalid_request' });

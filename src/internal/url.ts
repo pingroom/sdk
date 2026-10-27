@@ -62,7 +62,14 @@ export function redactUrlInMessage(message: string, url: URL, rawUrl: string): s
  */
 export function refuseRedirect(res: Response): void {
   if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
-    res.body?.cancel().catch(() => {});
+    // Release the body, best effort. A custom `fetch` such as node-fetch hands
+    // back a Node Readable with no cancel(); calling it threw a TypeError that
+    // surfaced as a retryable network_error instead of this refusal.
+    try {
+      (res.body?.cancel?.() as Promise<void> | undefined)?.catch?.(() => {});
+    } catch {
+      // Ignored: the refusal below is what matters.
+    }
     throw new PingRoomError('Refusing to follow a redirect; credentials and request bodies are never forwarded.', {
       code: 'redirect_refused',
       status: res.status,

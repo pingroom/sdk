@@ -7,6 +7,15 @@ export const TRANSIENT_BACKOFF_BASE_MS = 1000;
 export const TRANSIENT_BACKOFF_CAP_MS = 30_000;
 /** setTimeout fires immediately above this, so no delay may exceed it. */
 const MAX_TIMER_MS = 2_147_483_647;
+/**
+ * How long past the last-seen `expires_at` a wait keeps retrying an
+ * unreachable API. The server reports `expired` once expires_at passes, so
+ * after this the only outcome left is one that cannot be read. Covers clock
+ * skew. Same bound as the CLI.
+ */
+export const WAIT_EXPIRY_GRACE_MS = 5 * 60_000;
+/** The bound on an unbroken outage while no response has carried `expires_at`. */
+export const WAIT_UNKNOWN_EXPIRY_OUTAGE_MS = 15 * 60_000;
 
 /**
  * A failure a read loop may retry: a dropped connection, a request deadline,
@@ -53,6 +62,25 @@ export interface PollUntilSettledOptions<T> {
   signal?: AbortSignal;
   /** Minimum time between the starts of two polls, in ms. Default 0. */
   minIntervalMs?: number;
+  /** Read `expires_at` (an ISO time) from a validated response; it bounds an outage. */
+  expiresAt?: (value: T) => unknown;
+  /** Names what is waited on in the give-up message, e.g. `approval a1`. */
+  what: string;
+  /** Called before each retry of a transient failure; `attempt` counts consecutive failures from 1. */
+  onRetry?: (error: PingRoomError, attempt: number) => void;
+}
+
+function timeOf(value: unknown): number | null {
+  const at = typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(at) ? at : null;
+}
+
+function unavailable(last: PingRoomError, since: number, what: string): PingRoomError {
+  const reason = last.status > 0 ? `HTTP ${last.status}` : (last.code ?? 'network error');
+  return new PingRoomError(
+    `PingRoom unavailable since ${new Date(since).toISOString()} (${reason}); stopped waiting for ${what}.`,
+    { code: 'unavailable', cause: last },
+  );
 }
 
 /**
@@ -60,10 +88,19 @@ export interface PollUntilSettledOptions<T> {
  * terminal; retries transient failures with backoff; rejects with the
  * signal's reason once it aborts. A response that fails validation is never
  * returned as an outcome.
+ *
+ * The retries are bounded even without a signal. Once only failures have come
+ * back since the last valid response, and the last-seen `expires_at` plus
+ * {@link WAIT_EXPIRY_GRACE_MS} has passed (or, before any `expires_at` was
+ * seen, after {@link WAIT_UNKNOWN_EXPIRY_OUTAGE_MS} of unbroken failures), the
+ * wait rejects with `unavailable`, the last failure as its `cause`.
  */
 export async function pollUntilSettled<T>(options: PollUntilSettledOptions<T>): Promise<T> {
-  const { poll, validate, settled, signal, minIntervalMs = 0 } = options;
+  const { poll, validate, settled, signal, minIntervalMs = 0, expiresAt, what, onRetry } = options;
   let failures = 0;
+  let failingSince: number | null = null;
+  // expires_at plus grace, from the last valid response that carried one.
+  let deadline: number | null = null;
   for (;;) {
     throwIfAborted(signal);
     const startedAt = Date.now();
@@ -76,10 +113,22 @@ export async function pollUntilSettled<T>(options: PollUntilSettledOptions<T>): 
         throw error;
       }
       failures += 1;
-      await sleep(transientDelayMs(error, failures), signal);
+      failingSince ??= Date.now();
+      const remaining = (deadline ?? failingSince + WAIT_UNKNOWN_EXPIRY_OUTAGE_MS) - Date.now();
+      if (remaining <= 0) {
+        throw unavailable(error, failingSince, what);
+      }
+      onRetry?.(error, failures);
+      // Never sleep past the bound: the last attempt lands on it, not after it.
+      await sleep(Math.min(transientDelayMs(error, failures), remaining), signal);
       continue;
     }
     failures = 0;
+    failingSince = null;
+    const expiry = expiresAt ? timeOf(expiresAt(value)) : null;
+    if (expiry !== null) {
+      deadline = expiry + WAIT_EXPIRY_GRACE_MS;
+    }
     if (settled(value)) {
       return value;
     }
