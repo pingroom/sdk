@@ -1,2 +1,2 @@
 /** SDK version, surfaced in the User-Agent and the MCP clientInfo. Keep in sync with package.json. */
-export const VERSION = '0.7.1';
+export const VERSION = '0.8.0';
