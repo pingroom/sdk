@@ -37,8 +37,23 @@ await pr.broadcast('ab12cd', {
   is_urgent: true,
 });
 
-// Listen for what comes back
-const { notifications, cursor } = await pr.notifications.wait({ timeout: 20 });
+// Listen for what comes back. listen() reads the current head first, then
+// long-polls forward; stop it with an AbortSignal.
+const ac = new AbortController();
+for await (const ping of pr.notifications.listen({ signal: ac.signal })) {
+  console.log(ping.message);
+  ac.abort();
+}
+```
+
+A send that times out may still have been delivered. Pass an `idempotencyKey`
+to `broadcast()`, `actions.trigger()`, `approvals.request()` or
+`questions.ask()` and reuse the same key when you retry: the server replays
+the first result instead of pinging the human twice. The SDK sends it as the
+`Idempotency-Key` header (1–255 characters), never in the body.
+
+```ts
+await pr.broadcast('ab12cd', { message: 'Deploy shipped ✅', idempotencyKey: 'deploy-1.4.0-shipped' });
 ```
 
 Ping titles are limited to 40 characters. Visible bodies are limited to 120
@@ -195,6 +210,18 @@ pr.setToken(active.credential);
 const fresh = await pr.auth.refresh();
 pr.setToken(fresh.credential);
 await pr.auth.revoke();
+```
+
+Check what a credential is connected to before sending, and disconnect it when
+you are done:
+
+```ts
+const info = await pr.auth.connection();
+console.log(info.owner.id, info.owner.name, info.handle, info.home_room?.invite_code);
+
+// Revokes this credential and its refresh credentials.
+await pr.auth.disconnect();
+pr.setToken(null);
 ```
 
 Generic MCP clients (Cursor, Claude Desktop, Claude Code) should use the standard OAuth 2.1 lane at `/.well-known/oauth-authorization-server` instead — see [pingroom.io/connect-mcp.md](https://pingroom.io/connect-mcp.md).
@@ -372,7 +399,14 @@ for await (const ping of pr.notifications.listen({ signal: ac.signal })) {
 }
 ```
 
-Or a single long-poll:
+`listen()` retries transient failures (network errors, request timeouts, 429
+and 5xx) with a backoff that starts at `backoffMs` (default 1 s), doubles up to
+30 s, and waits out a server `retryAfter`. Pass `onError` to observe those
+retries. Any other failure, such as a 401 after the credential is revoked or a
+403, ends the iterator by throwing, with or without `onError`.
+
+Or a single long-poll. Without `after`, `wait()` answers at once with no pings
+and the current head cursor, so pass the cursor from a previous call:
 
 ```ts
 const { notifications, cursor } = await pr.notifications.wait({ after: lastCursor, timeout: 20 });
@@ -413,6 +447,7 @@ const approval = await pr.approvals.request('ab12cd', {
   question: 'Ship release 1.4.0 to production?',
   options: ['Ship it', 'Hold'],
   correlation_id: 'deploy-1.4.0',
+  idempotencyKey: 'deploy-1.4.0-approval', // reuse when retrying this request
 });
 
 const decided = await pr.approvals.waitForDecision(approval.id);
@@ -420,6 +455,18 @@ if (decided.status === 'decided' && decided.decision === 'Ship it') {
   // proceed
 }
 ```
+
+`status` is `pending`, `decided`, `expired` or `cancelled`. Gate on the exact
+approving `decision`, never on `decision !== 'Hold'`.
+
+`waitForDecision()`, `questions.waitForAnswer()` and `handoffs.waitForResult()`
+return only a response for the id you asked about, in a known state. Anything
+else, such as an HTML page from a proxy, `{}`, or another approval, rejects with
+`invalid_response` instead of being returned as an outcome. The wait routes
+share a 30-requests-per-minute limit per human, so these loops retry a 429
+after its `retryAfter`, and retry network errors and 5xx with a backoff capped
+at 30 s. They keep waiting until the request resolves or your `AbortSignal`
+fires; pass one to bound the wait.
 
 For a runnable example that binds approval to a file's SHA-256, handles timeouts,
 and refuses a changed artifact, see [release approval](examples/release-approval/README.md).
@@ -583,13 +630,16 @@ if (answered.state === 'answered') {
 }
 ```
 
-`waitForResult` loops the bounded long-poll until a terminal state lands, so `expired`/`cancelled` and a negative answer all come back as normal results — nothing is thrown for the outcome. Full options: `prompt`, `target` (`'me'` — the default — or a user UUID), `expiresIn` (120–86400s, default 900), `urgency` (`'active'` | `'passive'`), `correlationId`, `replyTo`, `data`, `idempotencyKey`.
+`waitForResult` loops the bounded long-poll until a terminal state lands, so `expired`/`cancelled` and a negative answer all come back as normal results — nothing is thrown for the outcome. Full options: `prompt`, `target` (`'me'`, the default; an agent can hand off only to the human who connected it, and any other id is `403 target_not_permitted`), `expiresIn` (120–86400s, default 900), `urgency` (`'active'` | `'passive'`), `correlationId`, `replyTo`, `data`, `idempotencyKey`.
 
 ```ts
 await pr.handoffs.get(id);                // current state (polling / audit)
 await pr.handoffs.list({ state: 'open' }); // your open handoffs
 await pr.handoffs.list({ state: 'all' });  // recent history (up to 200 per kind)
 ```
+
+`waitForResult` starts polls at least 2.1 seconds apart, so a short `timeout`
+cannot use up the wait route's 30-per-minute limit.
 
 Create/read map coded failures onto `PingRoomError` — branch on `error.code` (see [`HandoffErrorCode`](#errors)). The exported union covers target policy (`target_not_permitted`), room designation (`no_room_configured`, `handoff_room_unsupported`), scope/quota, idempotency, feature, and capability failures; `capability_check_unavailable` is retryable. Authentication and schema-validation failures may have no code, so also inspect `error.status`. `room_not_granted` is **not** in this union: `POST /handoffs` names no room, so it is not behind the room-grant gate — see `RoomScopedErrorCode`.
 
@@ -694,8 +744,9 @@ await pr.live.push('AB12CD', liveStatus.done('deploy-42', 'Shipped v1.4.0'));
 // ...or liveStatus.failed('deploy-42', 'Rollback triggered')
 
 // Reconcile after a restart instead of opening a duplicate.
-// Returns null for a 404 ONLY — no such stream in the last 24 hours. Every
-// other failure throws, including a 403 `room_not_granted`, so a permission
+// Returns null ONLY for a 404 `stream_not_found`: no such stream in the last
+// 24 hours. Every other failure throws, including a 404 for an unknown or
+// deleted room and a 403 `room_not_granted`, so a wrong room or a permission
 // problem is never mistaken for an absent stream.
 const snap = await pr.live.get('AB12CD', 'deploy-42');
 if (snap) console.log(snap.template, snap.current_step, snap.updated_at);
@@ -720,6 +771,8 @@ When PingRoom POSTs an event to *your* server, verify it before trusting it. New
 
 `timestamp` is the Unix-seconds value in `X-PingRoom-Timestamp`, and `deliveryId` is the exact `X-PingRoom-Delivery` value. **Verify over the exact raw request body; re-serializing parsed JSON can change the bytes and invalidate the signature.** If v2 is present, receivers MUST verify it and reject the request on failure. The helper accepts legacy v1 only when v2 is absent. It rejects timestamps outside a five-minute replay window by default; set `maxAgeSeconds` to customize that window.
 
+Pass `requireV2: true`. Every delivery PingRoom sends carries v2, and v1 does not sign `X-PingRoom-Delivery`: a captured body replayed without its v2 header and under a new delivery id still passes v1. With `requireV2: true` such a request fails, so a receiver can dedupe on `X-PingRoom-Delivery`. Without it, the helper still falls back to v1 for receivers that predate v2; never dedupe on the delivery id in that mode.
+
 ```ts
 import {
   verifyWebhookSignature,
@@ -729,6 +782,9 @@ import {
   WEBHOOK_DELIVERY_HEADER,
 } from '@pingroom/sdk';
 
+const signingSecret = process.env.PINGROOM_SIGNING_SECRET;
+if (!signingSecret) throw new Error('Set PINGROOM_SIGNING_SECRET to the webhook signing_secret.');
+
 // Express example — capture the raw body (e.g. express.raw())
 app.post('/pingroom', async (req, res) => {
   const ok = await verifyWebhookSignature({
@@ -737,7 +793,8 @@ app.post('/pingroom', async (req, res) => {
     signatureV2: req.get(WEBHOOK_SIGNATURE_V2_HEADER),
     timestamp: req.get(WEBHOOK_TIMESTAMP_HEADER),
     deliveryId: req.get(WEBHOOK_DELIVERY_HEADER),
-    secret: process.env.PINGROOM_SIGNING_SECRET,
+    secret: signingSecret,
+    requireV2: true,                            // refuse the legacy v1-only form
   });
   if (!ok) return res.status(401).end();
   // ... handle the verified event
@@ -791,19 +848,27 @@ const profile = await pr.directory.get('agt_deploybell');
 
 ## Errors
 
-Every failure rejects with a `PingRoomError` carrying the HTTP `status` and the API's machine `code` (e.g. `cooldown`, `rate_limited`, `room_not_granted`), plus `retryAfter` when present:
+Every failure rejects with a `PingRoomError` carrying the HTTP `status` and the API's machine `code` (e.g. `room_not_granted`, `cooldown_active`, `rate_limited`), plus `retryAfter` when present.
+
+Retry on the status, not on one code. Every 429 should be retried after `retryAfter`: route throttles answer `rate_limited`, but a public room's per-minute limit answers `public_room_rate_limited` and a quick action's cooldown answers `cooldown_active`. Reuse the same `idempotencyKey` on the retry:
 
 ```ts
 import { PingRoomError } from '@pingroom/sdk';
 
+const send = () => pr.broadcast('ab12cd', { message: 'hi', idempotencyKey: 'hello-1' });
 try {
-  await pr.broadcast('ab12cd', { message: 'hi' });
+  await send();
 } catch (err) {
-  if (err instanceof PingRoomError && err.code === 'rate_limited') {
+  if (err instanceof PingRoomError && err.status === 429) {
     await new Promise((r) => setTimeout(r, (err.retryAfter ?? 1) * 1000));
+    await send();
+  } else {
+    throw err;
   }
 }
 ```
+
+The SDK also raises a few client-side codes: `network_error` and `timeout` (status 0), `redirect_refused` when the API answers with a redirect (the SDK never follows one, so a token, upload or webhook body cannot be forwarded to another origin), `invalid_response` when a wait loop receives something that is not the requested approval, Question or handoff, and `invalid_request` for input refused before sending.
 
 The coded vocabulary is exported both as types and as runtime arrays, one per
 surface, so you can branch exhaustively:

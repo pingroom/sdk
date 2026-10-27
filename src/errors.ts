@@ -1,8 +1,11 @@
 /**
  * Error types. PingRoomError carries the HTTP status and the API's machine
- * `code` (e.g. `pings_closed`, `cooldown`, `rate_limited`) so callers can branch
- * without string-matching messages. The agent token is NEVER stored on or
- * serialized through an error.
+ * `code` (e.g. `room_not_granted`, `cooldown_active`, `rate_limited`) so callers
+ * can branch without string-matching messages. Retry any 429 after
+ * `retryAfter` rather than matching one code: route throttles answer
+ * `rate_limited`, but public-room and quick-action limits carry their own
+ * (`public_room_rate_limited`, `cooldown_active`). The agent token is NEVER
+ * stored on or serialized through an error.
  */
 
 export interface ApiErrorBody {

@@ -1523,9 +1523,24 @@ test('a room-scoped 403 room_not_granted propagates instead of reading as "no st
 });
 
 test('live.get still resolves null for a genuinely absent stream', async () => {
-  const fetchMock = async () => new Response(JSON.stringify({ message: 'not found' }), { status: 404 });
+  const fetchMock = async () => new Response(
+    JSON.stringify({ code: 'stream_not_found', message: 'No live stream for that correlation id in the last 24 hours.' }),
+    { status: 404 },
+  );
   const pr = new PingRoom({ token: 't', fetch: fetchMock });
   assert.equal(await pr.live.get('AB12CD', 'corr-1'), null);
+});
+
+test('live.get throws for a 404 that is not stream_not_found, such as an unknown room', async () => {
+  // A mistyped or deleted room code is the route-binding 404, which carries no
+  // stream code. Reading it as "no stream" would make a restarted producer open
+  // a new stream instead of failing.
+  const fetchMock = async () => new Response(JSON.stringify({ message: 'Resource not found.' }), { status: 404 });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  await assert.rejects(
+    () => pr.live.get('NOPE99', 'corr-1'),
+    (e) => e instanceof PingRoomError && e.status === 404 && e.code === null,
+  );
 });
 
 test('mcp.callTool initializes once, notifies the server, and sends the negotiated protocol header', async () => {

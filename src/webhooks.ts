@@ -12,6 +12,7 @@
  */
 
 import { PingRoomError, PingRoomTimeoutError } from './errors.js';
+import { defaultFetch } from './http.js';
 import { combineSignals } from './internal/async.js';
 import {
   assertActionNumber,
@@ -20,7 +21,7 @@ import {
   MAX_PING_TITLE_LENGTH,
   MAX_PUBLIC_PING_MESSAGE_LENGTH,
 } from './internal/guards.js';
-import { assertSecureUrl, redactUrlInMessage } from './internal/url.js';
+import { assertSecureUrl, redactUrlInMessage, refuseRedirect } from './internal/url.js';
 import type { LiveStatus } from './liveStatus.js';
 import type { AckMode, ActionState, FetchLike, JsonObject } from './types.js';
 import { VERSION } from './version.js';
@@ -34,10 +35,22 @@ export const WEBHOOK_EVENT_HEADER = 'X-PingRoom-Event';
 export interface VerifyWebhookSignatureOptions {
   /** The raw request body — the exact bytes received, NOT a re-stringified object. */
   payload: string | ArrayBuffer | Uint8Array;
-  /** Legacy X-PingRoom-Signature value (with or without the `sha256=` prefix). */
+  /**
+   * Legacy X-PingRoom-Signature value (with or without the `sha256=` prefix).
+   * Tried only when `signatureV2` is absent and `requireV2` is not set.
+   */
   signature?: string | null;
   /** X-PingRoom-Signature-V2 value. When present, v2 MUST verify; v1 is not tried. */
   signatureV2?: string | null;
+  /**
+   * Reject a delivery that carries no v2 signature instead of falling back to
+   * the legacy v1 HMAC. v1 does not sign `X-PingRoom-Delivery`, so a captured
+   * body replayed without its v2 header under a new delivery id still passes
+   * v1. Every current delivery carries v2: set this to `true`, and always set
+   * it when you dedupe on the delivery id. Default `false` for receivers that
+   * predate v2.
+   */
+  requireV2?: boolean;
   /** The X-PingRoom-Timestamp header value (Unix seconds). */
   timestamp: string | number | null | undefined;
   /** X-PingRoom-Delivery value required by the v2 signed message. */
@@ -50,10 +63,14 @@ export interface VerifyWebhookSignatureOptions {
 
 /**
  * Constant-time verification of an outgoing-webhook signature. Returns a
- * boolean and never throws on mismatch.
+ * boolean and never throws on mismatch. Pass `requireV2: true` so a delivery
+ * without the v2 signature is refused rather than checked against v1.
  */
 export async function verifyWebhookSignature(opts: VerifyWebhookSignatureOptions): Promise<boolean> {
   const hasV2Signature = opts.signatureV2 !== null && opts.signatureV2 !== undefined;
+  if (opts.requireV2 === true && !hasV2Signature) {
+    return false;
+  }
   const selectedSignature = hasV2Signature ? opts.signatureV2 : opts.signature;
   if (!selectedSignature || !opts.secret) {
     return false;
@@ -211,17 +228,17 @@ export async function sendIncomingWebhook(
     headers['Idempotency-Key'] = options.idempotencyKey;
   }
 
-  const fetchImpl = options.fetch ?? (globalThis.fetch as unknown as FetchLike | undefined);
-  if (!fetchImpl) {
-    throw new PingRoomError('No fetch implementation available.', { code: 'no_fetch' });
-  }
+  const fetchImpl = options.fetch ?? defaultFetch();
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new PingRoomTimeoutError()), options.timeoutMs ?? 30_000);
   const signal = combineSignals(controller.signal, options.signal);
 
   try {
-    const res = await fetchImpl(webhookUrl, { method: 'POST', headers, body: JSON.stringify(body), signal, redirect: 'error' });
+    // 'manual' plus an explicit refusal: Workers reject redirect: 'error', and
+    // a 307/308 must not replay this body to another origin.
+    const res = await fetchImpl(webhookUrl, { method: 'POST', headers, body: JSON.stringify(body), signal, redirect: 'manual' });
+    refuseRedirect(res);
     const text = await res.text();
     let json: unknown = null;
     if (text) {

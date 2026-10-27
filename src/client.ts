@@ -1,6 +1,6 @@
 import { PingRoomActivationIncompleteError, PingRoomError } from './errors.js';
 import { HttpClient } from './http.js';
-import { combineSignals, sleep } from './internal/async.js';
+import { combineSignals, sleep, throwIfAborted } from './internal/async.js';
 import {
   assertActionNumber,
   assertMaxLength,
@@ -11,6 +11,7 @@ import {
   requireNonEmpty,
   requirePresentString,
 } from './internal/guards.js';
+import { isTransientError, pollUntilSettled, transientDelayMs } from './internal/retry.js';
 import { linkPing } from './linkPing.js';
 import type { LiveStatusPing, LiveStatusResult, LiveStatusSnapshot } from './liveStatus.js';
 import { locationPing } from './locationPing.js';
@@ -24,6 +25,8 @@ import type {
   AgentInboxActivationQuestion,
   AgentInboxActivationResult,
   AgentInboxEnsureInput,
+  AgentConnectionInfo,
+  AgentDisconnectResult,
   AgentNotification,
   Approval,
   ApprovalInput,
@@ -82,6 +85,8 @@ import type {
 } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.pingroom.io';
+/** Node's util.inspect hook, named through the global registry so no import is needed. */
+const INSPECT: unique symbol = Symbol.for('nodejs.util.inspect.custom');
 /** Server cap per uploaded file; a larger body is a 413 the server answers before reading it. */
 const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_TRIGGER_ATTACHMENTS = 4;
@@ -91,7 +96,13 @@ const MAX_QUICK_ACTION_PAGES = 4;
 const LONG_POLL_BUFFER_MS = 10_000;
 const DEFAULT_WAIT_SECONDS = 20;
 const DEFAULT_INBOX_ACTIVATION_TIMEOUT_MS = 120_000;
-const MIN_INBOX_ACTIVATION_POLL_INTERVAL_MS = 2100;
+/**
+ * Minimum spacing between the starts of two handoff-wait polls. The route is
+ * throttled at 30 requests a minute per human; a short or zero `timeout`
+ * would otherwise let one loop exhaust it.
+ */
+const MIN_HANDOFF_POLL_INTERVAL_MS = 2100;
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
 
 function envBaseUrl(): string | undefined {
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
@@ -99,7 +110,51 @@ function envBaseUrl(): string | undefined {
 }
 
 function enc(segment: string): string {
+  // encodeURIComponent leaves `.` and `..` alone, and URL parsing then
+  // resolves them as dot segments: `live.get('AB12', '..')` would request the
+  // room itself. No id is empty or a dot segment, so refuse them.
+  if (segment === '' || segment === '.' || segment === '..') {
+    throw new PingRoomError('A path parameter may not be empty, `.` or `..`.', { code: 'invalid_request' });
+  }
   return encodeURIComponent(segment);
+}
+
+/**
+ * Lift the SDK-only `idempotencyKey` out of an input and into the
+ * `Idempotency-Key` header the server reads. The server trims the key and
+ * accepts 1–255 characters.
+ */
+function splitIdempotencyKey<T extends { idempotencyKey?: string }>(
+  input: T,
+): { body: Omit<T, 'idempotencyKey'>; headers?: Record<string, string> } {
+  const { idempotencyKey, ...body } = input;
+  if (idempotencyKey === undefined) {
+    return { body };
+  }
+  requireNonEmpty(idempotencyKey, 'idempotencyKey');
+  assertMaxLength(idempotencyKey, MAX_IDEMPOTENCY_KEY_LENGTH, 'idempotencyKey');
+  return { body, headers: { 'Idempotency-Key': idempotencyKey } };
+}
+
+/**
+ * The per-slot checks shared by `updateMany()` and `updateLayout()`: a valid,
+ * present, unique action_number and an icon whenever the slot has a label.
+ * Two entries for one slot would let the last silently win, and the caller
+ * would never learn which of its definitions was stored.
+ */
+function assertActionSlots(actions: QuickActionInput[]): void {
+  const seen = new Set<number>();
+  for (const action of actions) {
+    assertActionNumber(action.action_number);
+    if (action.action_number === undefined || action.action_number === null) {
+      throw new PingRoomError('`action_number` is required for each action.', { code: 'invalid_request' });
+    }
+    if (seen.has(action.action_number)) {
+      throw new PingRoomError(`Duplicate action_number ${action.action_number}.`, { code: 'invalid_request' });
+    }
+    seen.add(action.action_number);
+    assertQuickActionIcon(action);
+  }
 }
 
 function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
@@ -314,10 +369,63 @@ function validateInboxWait(value: unknown, expectedId: string): Handoff {
   return value as unknown as Handoff;
 }
 
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) {
-    throw signal.reason ?? new Error('aborted');
+/** UUIDs are case-insensitive; a caller may hold an id in either case. */
+function sameId(received: unknown, expected: string): boolean {
+  return typeof received === 'string' && received.toLowerCase() === expected.toLowerCase();
+}
+
+function invalidWaitResponse(subject: string, expectedId: string, value: unknown, stateField: string): never {
+  throw new PingRoomError(`PingRoom returned an invalid ${subject} wait response.`, {
+    code: 'invalid_response',
+    body: {
+      expected_id: expectedId,
+      received_id: isRecord(value) && typeof value['id'] === 'string' ? value['id'] : null,
+      [stateField]: isRecord(value) && typeof value[stateField] === 'string' ? value[stateField] : null,
+    },
+  });
+}
+
+const APPROVAL_STATUSES: ReadonlySet<string> = new Set(['pending', 'decided', 'expired', 'cancelled']);
+const QUESTION_STATES: ReadonlySet<string> = new Set(['pending', 'answered', 'expired', 'cancelled']);
+const HANDOFF_STATES: ReadonlySet<string> = new Set(['open', 'acked', 'pending', 'answered', 'expired', 'cancelled']);
+
+/**
+ * A wait response is trusted as an outcome only when it is the approval that
+ * was asked about, in a known status. A captive portal's HTML, `{}`, or another
+ * approval must not read as "decided".
+ */
+function validateApprovalWait(value: unknown, approvalId: string): Approval {
+  const status = isRecord(value) ? value['status'] : undefined;
+  if (
+    !isRecord(value)
+    || !sameId(value['id'], approvalId)
+    || typeof status !== 'string'
+    || !APPROVAL_STATUSES.has(status)
+    || !isNullableString(value['decided_at'])
+    // A gate acts on `decision`; a decided approval without one, or a pending
+    // one already stamped decided, is not an outcome it can act on.
+    || (status === 'decided' && !isNonEmptyString(value['decision']))
+    || (status === 'pending' && value['decided_at'] !== null)
+  ) {
+    return invalidWaitResponse('approval', approvalId, value, 'status');
   }
+  return value as unknown as Approval;
+}
+
+function validateQuestionWait(value: unknown, questionId: string): Question {
+  const state = isRecord(value) ? value['state'] : undefined;
+  if (!isRecord(value) || !sameId(value['id'], questionId) || typeof state !== 'string' || !QUESTION_STATES.has(state)) {
+    return invalidWaitResponse('question', questionId, value, 'state');
+  }
+  return value as unknown as Question;
+}
+
+function validateHandoffWait(value: unknown, handoffId: string): Handoff {
+  const state = isRecord(value) ? value['state'] : undefined;
+  if (!isRecord(value) || !sameId(value['id'], handoffId) || typeof state !== 'string' || !HANDOFF_STATES.has(state)) {
+    return invalidWaitResponse('handoff', handoffId, value, 'state');
+  }
+  return value as unknown as Handoff;
 }
 
 // --- namespaces -----------------------------------------------------------
@@ -394,11 +502,11 @@ class AuthApi {
     let transientFailures = 0;
 
     while (Date.now() < deadline) {
-      this.throwIfPairingAborted(options.signal);
+      throwIfAborted(options.signal);
 
       try {
         const status = await this.pairingStatus({ signal: options.signal });
-        this.throwIfPairingAborted(options.signal);
+        throwIfAborted(options.signal);
         transientFailures = 0;
 
         if (status.status === 'active') {
@@ -470,12 +578,6 @@ class AuthApi {
     });
   }
 
-  private throwIfPairingAborted(signal?: AbortSignal): void {
-    if (signal?.aborted) {
-      throw signal.reason ?? new Error('aborted');
-    }
-  }
-
   /** Rotate to a fresh credential (same scopes/handle). */
   refresh(): Promise<Credential> {
     return this.http.request('POST', '/api/agent/auth/refresh', { body: {} });
@@ -484,6 +586,25 @@ class AuthApi {
   /** Revoke the current credential. */
   revoke(): Promise<void> {
     return this.http.request('POST', '/api/agent/auth/revoke', { body: {} });
+  }
+
+  /**
+   * What this credential is connected to: the robot, the owner's public id and
+   * name, the home room and room memberships, and the room grant. Check
+   * `owner.id` and `handle` against the account and robot you approved before
+   * sending anything.
+   */
+  connection(): Promise<AgentConnectionInfo> {
+    return this.http.request('GET', '/api/agent/connection');
+  }
+
+  /**
+   * Disconnect this agent: revokes the calling credential and its refresh
+   * credentials. The client keeps the now-revoked token; clear it with
+   * `setToken(null)` or pair again.
+   */
+  disconnect(): Promise<AgentDisconnectResult> {
+    return this.http.request('POST', '/api/agent/disconnect', { body: {} });
   }
 }
 
@@ -568,23 +689,7 @@ class ActionsApi {
       throw new PingRoomError('A batch may contain at most 16 action slots.', { code: 'invalid_request' });
     }
 
-    const seen = new Set<number>();
-    for (const action of actions) {
-      assertActionNumber(action.action_number);
-      if (action.action_number === undefined || action.action_number === null) {
-        throw new PingRoomError('`action_number` is required for each action.', { code: 'invalid_request' });
-      }
-      // Two entries for one slot would let the last silently win, and the
-      // caller would never learn which of its definitions was stored.
-      if (seen.has(action.action_number)) {
-        throw new PingRoomError(
-          `Duplicate action_number ${action.action_number}.`,
-          { code: 'invalid_request' },
-        );
-      }
-      seen.add(action.action_number);
-      assertQuickActionIcon(action);
-    }
+    assertActionSlots(actions);
 
     return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/actions`, {
       body: { actions: actions.map((action) => dropUndefined({ ...action })) },
@@ -602,8 +707,10 @@ class ActionsApi {
   trigger(inviteCode: string, actionNumber: number, input: TriggerInput = {}): Promise<PingResult> {
     assertActionNumber(actionNumber);
     assertTriggerInput(input);
+    const { body, headers } = splitIdempotencyKey(input);
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/actions/${actionNumber}/trigger`, {
-      body: dropUndefined({ ...input }),
+      body: dropUndefined({ ...body }),
+      ...(headers ? { headers } : {}),
     });
   }
 
@@ -635,15 +742,7 @@ class ActionsApi {
         code: 'invalid_request',
       });
     }
-    const seen = new Set<number>();
-    for (const action of input.actions) {
-      assertActionNumber(action.action_number);
-      if (seen.has(action.action_number)) {
-        throw new PingRoomError(`Duplicate action_number ${action.action_number}.`, { code: 'invalid_request' });
-      }
-      seen.add(action.action_number);
-      assertQuickActionIcon(action);
-    }
+    assertActionSlots(input.actions);
     return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/actions/layout`, {
       body: {
         base_action_ids: input.base_action_ids,
@@ -788,34 +887,38 @@ class NotificationsApi {
    */
   async *listen(input: ListenInput = {}): AsyncGenerator<AgentNotification, void, void> {
     let cursor = input.after;
-    if (cursor === undefined) {
-      const head = await this.wait({ timeout: 0, ...(input.signal ? { signal: input.signal } : {}) });
-      cursor = head.cursor;
-      for (const n of head.notifications) {
-        yield n;
-      }
-    }
-    const backoff = input.backoffMs ?? 1000;
+    let headRead = cursor !== undefined;
+    const backoffMs = input.backoffMs ?? 1000;
+    let failures = 0;
     while (!input.signal?.aborted) {
       let result: WaitResult;
       try {
-        result = await this.wait({
-          after: cursor,
-          ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
-          ...(input.limit !== undefined ? { limit: input.limit } : {}),
-          ...(input.signal ? { signal: input.signal } : {}),
-        });
+        result = headRead
+          ? await this.wait({
+            after: cursor,
+            ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
+            ...(input.limit !== undefined ? { limit: input.limit } : {}),
+            ...(input.signal ? { signal: input.signal } : {}),
+          })
+          // No cursor yet: read the current head (an immediate, empty answer)
+          // so only pings that land after this call are delivered.
+          : await this.wait({ timeout: 0, ...(input.signal ? { signal: input.signal } : {}) });
       } catch (err) {
         if (input.signal?.aborted) {
           return;
         }
-        if (input.onError) {
-          input.onError(err);
-          await sleep(backoff, input.signal);
-          continue;
+        // A revoked credential or a bad request never heals; only network
+        // failures, deadlines, 429 and 5xx are retried.
+        if (!isTransientError(err)) {
+          throw err;
         }
-        throw err;
+        failures += 1;
+        input.onError?.(err);
+        await sleep(transientDelayMs(err, failures, backoffMs), input.signal);
+        continue;
       }
+      failures = 0;
+      headRead = true;
       cursor = result.cursor ?? cursor;
       for (const n of result.notifications) {
         yield n;
@@ -837,7 +940,11 @@ class AgentsApi {
   ping(handle: string, ping: PingInput): Promise<DirectPingResult> {
     requireNonEmpty(handle, 'handle');
     assertPing(ping);
-    return this.http.request('POST', `/api/agent/agents/${enc(handle)}/ping`, { body: dropUndefined({ ...ping }) });
+    const { body, headers } = splitIdempotencyKey(ping);
+    return this.http.request('POST', `/api/agent/agents/${enc(handle)}/ping`, {
+      body: dropUndefined({ ...body }),
+      ...(headers ? { headers } : {}),
+    });
   }
 }
 
@@ -848,8 +955,10 @@ class ApprovalsApi {
   request(inviteCode: string, input: ApprovalInput): Promise<Approval> {
     requireNonEmpty(input.question, 'question');
     assertStructuredData(input.data);
+    const { body, headers } = splitIdempotencyKey(input);
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/approvals`, {
-      body: dropUndefined({ ...input }),
+      body: dropUndefined({ ...body }),
+      ...(headers ? { headers } : {}),
     });
   }
 
@@ -866,20 +975,20 @@ class ApprovalsApi {
     });
   }
 
-  /** Block until the human decides (or the request expires), looping wait() under the hood. */
+  /**
+   * Block until the human decides (or the request expires or is cancelled),
+   * looping wait() under the hood. A response that is not this approval in a
+   * known status rejects with `invalid_response`. Network failures, 429 and 5xx
+   * are retried with backoff (honouring `retryAfter`) until `signal` aborts.
+   */
   async waitForDecision(approvalId: string, input: { signal?: AbortSignal } = {}): Promise<Approval> {
-    for (;;) {
-      if (input.signal?.aborted) {
-        throw input.signal.reason ?? new Error('aborted');
-      }
-      const approval = await this.wait(approvalId, input.signal ? { signal: input.signal } : {});
-      if (approval.decided_at !== null || approval.status !== 'pending') {
-        return approval;
-      }
-      // An injected transport can resolve pending polls immediately. Yield
-      // between them so timer-driven cancellation and deadlines can run.
-      await sleep(0, input.signal);
-    }
+    requireNonEmpty(approvalId, 'approvalId');
+    return pollUntilSettled({
+      poll: () => this.wait(approvalId, input.signal ? { signal: input.signal } : {}),
+      validate: (value) => validateApprovalWait(value, approvalId),
+      settled: (approval) => approval.status !== 'pending',
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
   }
 }
 
@@ -901,14 +1010,10 @@ class QuestionsApi {
     requireNonEmpty(input.prompt, 'prompt');
     assertStructuredData(input.data);
     assertPollShape(input);
-    const { idempotencyKey, ...body } = input;
-    if (idempotencyKey !== undefined) {
-      requireNonEmpty(idempotencyKey, 'idempotencyKey');
-      assertMaxLength(idempotencyKey, 255, 'idempotencyKey');
-    }
+    const { body, headers } = splitIdempotencyKey(input);
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/questions`, {
       body: dropUndefined(body),
-      ...(idempotencyKey !== undefined ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
+      ...(headers ? { headers } : {}),
     });
   }
 
@@ -931,19 +1036,19 @@ class QuestionsApi {
    * wait() under the hood. Returns the resolved Question — inspect `state` and
    * `answer.value` to branch. A poll returns once it closes; its `answer` is the
    * leading option, or `null` on a tie, and `results` holds the tally.
+   *
+   * A response that is not this Question in a known state rejects with
+   * `invalid_response`. Network failures, 429 and 5xx are retried with backoff
+   * (honouring `retryAfter`) until `signal` aborts.
    */
   async waitForAnswer(questionId: string, input: { signal?: AbortSignal } = {}): Promise<Question> {
-    for (;;) {
-      if (input.signal?.aborted) {
-        throw input.signal.reason ?? new Error('aborted');
-      }
-      const question = await this.wait(questionId, input.signal ? { signal: input.signal } : {});
-      if (question.state !== 'pending') {
-        return question;
-      }
-      // Yield between polls so timer-driven cancellation can run (see ApprovalsApi).
-      await sleep(0, input.signal);
-    }
+    requireNonEmpty(questionId, 'questionId');
+    return pollUntilSettled({
+      poll: () => this.wait(questionId, input.signal ? { signal: input.signal } : {}),
+      validate: (value) => validateQuestionWait(value, questionId),
+      settled: (question) => question.state !== 'pending',
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
   }
 
   /** List the asker's Questions, optionally filtered by state. */
@@ -1038,20 +1143,21 @@ class HandoffsApi {
    * Block until the handoff resolves (or expires/cancels), looping the bounded
    * long-poll under the hood. `expired`/`cancelled` and a negative answer (e.g.
    * `hold`) all surface as normal terminal results — nothing is thrown for them.
+   *
+   * Polls start at least 2.1 s apart, so a short `timeout` stays under the
+   * route's 30-per-minute limit. A response that is not this handoff in a
+   * known state rejects with `invalid_response`. Network failures, 429 and 5xx
+   * are retried with backoff (honouring `retryAfter`) until `signal` aborts.
    */
   async waitForResult(id: string, input: WaitHandoffInput = {}): Promise<Handoff> {
     requireNonEmpty(id, 'id');
-    for (;;) {
-      if (input.signal?.aborted) {
-        throw input.signal.reason ?? new Error('aborted');
-      }
-      const handoff = await this.wait(id, input);
-      if (isHandoffTerminal(handoff)) {
-        return handoff;
-      }
-      // Yield between polls so timer-driven cancellation can run (see ApprovalsApi).
-      await sleep(0, input.signal);
-    }
+    return pollUntilSettled({
+      poll: () => this.wait(id, input),
+      validate: (value) => validateHandoffWait(value, id),
+      settled: isHandoffTerminal,
+      minIntervalMs: MIN_HANDOFF_POLL_INTERVAL_MS,
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
   }
 
   /** List the agent's open handoffs or bounded recent history. */
@@ -1158,7 +1264,7 @@ class InboxApi {
 
         if (question.state === 'pending') {
           await sleep(
-            Math.max(0, MIN_INBOX_ACTIVATION_POLL_INTERVAL_MS - (Date.now() - pollStartedAt)),
+            Math.max(0, MIN_HANDOFF_POLL_INTERVAL_MS - (Date.now() - pollStartedAt)),
             signal,
           );
           continue;
@@ -1250,11 +1356,11 @@ class LiveApi {
    * Read back a stream this credential started, so a restarted producer can
    * reconcile instead of opening a duplicate.
    *
-   * Resolves null for a 404 ONLY — no stream with that correlation id in the
-   * last 24 hours. Every other failure throws: in particular a 403
-   * `room_not_granted` ({@link RoomScopedErrorCode}), raised when the room is
-   * outside the grant the human gave this agent, propagates rather than being
-   * reported as "no stream".
+   * Resolves null ONLY for a 404 `stream_not_found` — no stream with that
+   * correlation id in the last 24 hours. Every other failure throws: a 404 for
+   * an unknown or deleted room code, and a 403 `room_not_granted`
+   * ({@link RoomScopedErrorCode}) when the room is outside the grant the human
+   * gave this agent, both propagate rather than being reported as "no stream".
    */
   async get(inviteCode: string, correlationId: string): Promise<LiveStatusSnapshot | null> {
     requireNonEmpty(inviteCode, 'inviteCode');
@@ -1265,7 +1371,7 @@ class LiveApi {
         `/api/agent/rooms/${enc(inviteCode)}/live/${enc(correlationId)}`,
       );
     } catch (error) {
-      if (error instanceof PingRoomError && error.status === 404) return null;
+      if (error instanceof PingRoomError && error.status === 404 && error.code === 'stream_not_found') return null;
       throw error;
     }
   }
@@ -1441,11 +1547,27 @@ export class PingRoom {
     });
   }
 
-  /** Broadcast a ping to every member of a room you own. */
+  /**
+   * Broadcast a ping to every member of a room you own. Pass `idempotencyKey`
+   * and reuse it when retrying after a timeout or network error, so a send
+   * the server already committed is replayed rather than delivered twice.
+   */
   broadcast(inviteCode: string, ping: PingInput): Promise<PingResult> {
     assertPing(ping);
+    const { body, headers } = splitIdempotencyKey(ping);
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/notifications`, {
-      body: dropUndefined({ ...ping }),
+      body: dropUndefined({ ...body }),
+      ...(headers ? { headers } : {}),
     });
+  }
+
+  /** What a logger or JSON.stringify() sees: the API origin, never the credential. */
+  toJSON(): { baseUrl: string; token: '[redacted]' | null } {
+    return this.http.toJSON();
+  }
+
+  [INSPECT](): string {
+    const { baseUrl, token } = this.http.toJSON();
+    return `PingRoom { baseUrl: ${JSON.stringify(baseUrl)}, token: ${token === null ? 'null' : token} }`;
   }
 }

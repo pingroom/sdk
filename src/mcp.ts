@@ -52,13 +52,21 @@ export class McpClient {
       body: envelope,
       headers: this.headers(),
     });
-    if (res && res.error) {
+    const isObject = res !== null && typeof res === 'object' && !Array.isArray(res);
+    if (isObject && res.error) {
       throw new PingRoomError(`MCP error ${res.error.code}: ${res.error.message}`, {
         code: `mcp_${res.error.code}`,
         body: res.error,
       });
     }
-    return res?.result as T;
+    // A 2xx that is not a JSON-RPC response (no body, an HTML page, an object
+    // with neither member) must fail here, not as a TypeError in the caller.
+    if (!isObject || !Object.prototype.hasOwnProperty.call(res, 'result')) {
+      throw new PingRoomError('MCP endpoint returned a response with neither `result` nor `error`.', {
+        code: 'mcp_invalid_response',
+      });
+    }
+    return res.result as T;
   }
 
   /**

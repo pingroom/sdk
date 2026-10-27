@@ -34,3 +34,13 @@ test('linkPing rejects an over-long button label', () => {
     /at most 26/,
   );
 });
+
+test('linkPing counts characters like the server, so an emoji label is not double-counted', () => {
+  // 14 emoji are 28 UTF-16 units; the server's mb_strlen counts 14.
+  const label = '😀'.repeat(14);
+  assert.deepEqual(linkPing({ url: 'https://example.com', buttonLabel: label }), { url: 'https://example.com', button_label: label });
+  assert.throws(() => linkPing({ url: 'https://example.com', buttonLabel: '😀'.repeat(27) }), /at most 26/);
+  const url = `https://example.com/${'é'.repeat(2028)}`;
+  assert.equal(Array.from(url).length, 2048);
+  assert.equal(linkPing({ url }).url, url);
+});

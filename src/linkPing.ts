@@ -28,6 +28,11 @@ export interface LinkPingData {
 const URL_MAX = 2048;
 const LABEL_MAX = 26;
 
+/** Count code points, as the server's mb_strlen does — an emoji is one character, not two. */
+function characterLength(value: string): number {
+  return Array.from(value).length;
+}
+
 /** Build the `data` fragment for a link ping. Spread it into a ping's `data` object. */
 export function linkPing(input: LinkPingInput): LinkPingData {
   let parsed: URL;
@@ -39,10 +44,10 @@ export function linkPing(input: LinkPingInput): LinkPingData {
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     throw new TypeError('linkPing: url must be an absolute http(s) URL');
   }
-  if (input.url.length > URL_MAX) {
+  if (characterLength(input.url) > URL_MAX) {
     throw new TypeError(`linkPing: url must be at most ${URL_MAX} characters`);
   }
-  if (input.buttonLabel !== undefined && input.buttonLabel.length > LABEL_MAX) {
+  if (input.buttonLabel !== undefined && characterLength(input.buttonLabel) > LABEL_MAX) {
     throw new TypeError(`linkPing: buttonLabel must be at most ${LABEL_MAX} characters`);
   }
   const out: LinkPingData = { url: input.url };

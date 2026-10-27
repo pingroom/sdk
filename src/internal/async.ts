@@ -45,3 +45,10 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
+
+/** Throw the signal's reason once it has aborted. A missing signal never throws. */
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error('aborted');
+  }
+}

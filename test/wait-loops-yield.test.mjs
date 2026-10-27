@@ -17,7 +17,7 @@ function subprocess(script) {
 
 // Each loop polls a transport that answers immediately with a non-terminal
 // result. A timer aborts the signal; the loop must yield for it to fire.
-function abortableLoop(body, call) {
+function abortableLoop(body, call, { abortAtPoll = 2 } = {}) {
   return subprocess(`
     import { PingRoom } from ${JSON.stringify(SDK_URL)};
     const controller = new AbortController();
@@ -28,7 +28,7 @@ function abortableLoop(body, call) {
       token: 'synthetic-offline-token', baseUrl: 'https://wait-loops.invalid',
       fetch: async () => {
         polls++;
-        if (polls === 2) timer = setTimeout(() => controller.abort(reason), 100);
+        if (polls === ${abortAtPoll}) timer = setTimeout(() => controller.abort(reason), 100);
         return new Response(JSON.stringify(${JSON.stringify(body)}));
       },
     });
@@ -55,13 +55,16 @@ test('immediately pending question polls allow timer-driven cancellation', () =>
 });
 
 test('immediately pending handoff polls allow timer-driven cancellation', () => {
+  // Handoff polls are spaced 2.1 s apart, so the abort lands inside that wait:
+  // it must end the wait early rather than after the next poll.
   const result = abortableLoop(
     { id: 'offline', kind: 'ack', state: 'pending' },
     `await client.handoffs.waitForResult('offline', { signal: controller.signal });`,
+    { abortAtPoll: 1 },
   );
   assert.equal(result.cancelled, true);
   assert.equal(result.sameReason, true);
-  assert.ok(result.polls >= 2);
+  assert.equal(result.polls, 1);
 });
 
 test('immediately empty listen batches allow timer-driven cancellation', () => {

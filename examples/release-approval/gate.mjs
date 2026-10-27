@@ -152,7 +152,13 @@ export async function releaseWithApproval({ client, room, artifactPath, destinat
       block('invalid_approval', 'Created approval must be pending with a valid future expiry.');
     }
     const approvalId = created.id;
-    const decided = await bounded(() => client.approvals.waitForDecision(approvalId, { signal: controller.signal }));
+    // The SDK refuses a wait response that is not this approval in a known
+    // status; the gate reports that the same way as its own binding checks.
+    const decided = await bounded(() => client.approvals.waitForDecision(approvalId, { signal: controller.signal }))
+      .catch((error) => {
+        if (error?.code === 'invalid_response') block('invalid_approval', 'PingRoom returned a malformed approval.');
+        throw error;
+      });
     check();
     verifyBinding(decided, expected, approvalId);
     if (timestamp(decided.expires_at) !== expiresAt) block('invalid_approval', 'Approval expiry changed.');

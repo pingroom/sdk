@@ -137,6 +137,8 @@ export interface AgentRoomMembership {
   status: 'active' | 'removed';
   joined_at: string | null;
   removed_at: string | null;
+  /** True for the robot's home room. Sent by `auth.connection()`. */
+  is_home?: boolean;
   room: AgentDeliveryRoom | null;
 }
 
@@ -166,6 +168,42 @@ export interface Credential extends PairingIdentityMetadata {
   rooms?: AgentAccessRoom[];
   /** Server-authoritative endpoints associated with this connection. */
   links?: AgentCredentialLinks;
+}
+
+/** The human a connection belongs to, as `auth.connection()` and `auth.disconnect()` report it. */
+export interface AgentConnectionOwner {
+  /** Public user id. Match it to the account you approved before sending. */
+  id: string;
+  name: string;
+}
+
+/** `auth.connection()`: what this credential is connected to. */
+export interface AgentConnectionInfo {
+  flow_version: 2;
+  claim_mode: 'agent_identity';
+  status: 'active';
+  handle: string | null;
+  agent: PairingAgent;
+  owner: AgentConnectionOwner;
+  /** The robot's Question/Handoff delivery room, or null when none is designated. */
+  home_room: AgentAccessRoom | null;
+  /** The robot's membership of its home room. */
+  room_membership: AgentRoomMembership | null;
+  /** Every active room membership, home room first. */
+  room_memberships: AgentRoomMembership[];
+  room_access: AgentRoomAccess | null;
+  links: AgentCredentialLinks;
+  [key: string]: unknown;
+}
+
+/** `auth.disconnect()`: the calling credential and its refresh credentials are revoked. */
+export interface AgentDisconnectResult {
+  status: 'revoked';
+  handle: string | null;
+  owner: AgentConnectionOwner;
+  /** Reconnect guidance for the human. */
+  message: string;
+  [key: string]: unknown;
 }
 
 export interface ClaimStartParams {
@@ -430,7 +468,7 @@ export interface PingInput {
    * Open the acknowledgement lifecycle for this ping. The ack_mode rule
    * determines when it resolves, and recipients see a lock-screen card with an Acknowledge button.
    *
-   * Does NOT raise the delivery priority — that is {@link SendPingInput.is_urgent},
+   * Does NOT raise the delivery priority — that is {@link PingInput.is_urgent},
    * and the two are independent. They were one flag, which meant asking for a
    * ping that cuts through Focus also demanded that somebody acknowledge it.
    */
@@ -445,8 +483,19 @@ export interface PingInput {
    * also cuts through Focus.
    */
   is_urgent?: boolean;
-  /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. Ignored unless `requires_ack` is set. */
+  /**
+   * Optional acknowledgement deadline in seconds (60–86400). Omit/null for no
+   * deadline. Validated on every send, so an out-of-range value is a 422 even
+   * without `requires_ack`; it takes effect only when the ping requires
+   * acknowledgement.
+   */
   ack_timeout_seconds?: number | null;
+  /**
+   * Sent as the `Idempotency-Key` header (1–255 characters), never in the body.
+   * Reuse the same key when retrying after a timeout or network error: the
+   * server replays the first result instead of sending the ping again.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -544,6 +593,12 @@ export interface TriggerInput {
    * rather than firing the wrong Ping.
    */
   quick_action_id?: string;
+  /**
+   * Sent as the `Idempotency-Key` header (1–255 characters), never in the body.
+   * Reuse the same key when retrying after a timeout or network error: the
+   * server replays the first result instead of firing the press again.
+   */
+  idempotencyKey?: string;
 }
 
 /** The closed `data` object a quick-action press may carry. */
@@ -695,7 +750,8 @@ export interface NotificationHistoryEntry extends AgentNotification {
 }
 
 export interface ListNotificationsInput {
-  type?: string;
+  /** `received` or `sent`; the server refuses any other value. */
+  type?: 'received' | 'sent';
   room_id?: string;
   date?: string;
   /** Page size (1–25). Omit to retain the server's legacy default. */
@@ -737,9 +793,17 @@ export interface ListenInput {
   timeout?: number;
   limit?: number;
   signal?: AbortSignal;
-  /** Called on a transient error instead of throwing; the loop backs off and retries. */
+  /**
+   * Called with each transient error (network failure, request timeout, 429,
+   * 5xx) before the loop backs off and retries; transient errors are retried
+   * whether or not this is set. Any other error (401, 403, 422, …) ends the
+   * iterator by throwing, so a revoked credential never retries forever.
+   */
   onError?: (err: unknown) => void;
-  /** Backoff after a handled error, in ms (default 1000). */
+  /**
+   * First backoff after a transient error, in ms (default 1000). It doubles on
+   * each consecutive failure up to 30 s; a server `retryAfter` replaces it.
+   */
   backoffMs?: number;
 }
 
@@ -752,12 +816,21 @@ export interface ApprovalInput {
   correlation_id?: string;
   data?: JsonObject;
   ttl?: number;
+  /**
+   * Sent as the `Idempotency-Key` header (1–255 characters), never in the body.
+   * Reuse the same key when retrying after a timeout or network error: the
+   * server replays the first result instead of asking the human a second time.
+   */
+  idempotencyKey?: string;
 }
 
 export interface Approval {
   id: string;
-  /** A human answer has status `decided`; inspect `decision` for the chosen option. */
-  status: 'pending' | 'decided' | 'approved' | 'denied' | 'expired' | (string & {});
+  /**
+   * A human answer has status `decided`; inspect `decision` for the chosen
+   * option. `approved`/`denied` are never sent.
+   */
+  status: 'pending' | 'decided' | 'expired' | 'cancelled' | (string & {});
   question: string;
   title: string | null;
   options: string[];
@@ -766,7 +839,8 @@ export interface Approval {
   expires_at: string | null;
   correlation_id: string | null;
   data: JsonObject | null;
-  room_code: string;
+  /** Null when the approval's room no longer exists. */
+  room_code: string | null;
   [key: string]: unknown;
 }
 
@@ -835,7 +909,7 @@ export type QuestionOptionSpec = string | QuestionOptionInput;
 /** Invite a short typed answer, on its own (text-only) or alongside options. */
 export interface QuestionTextInput {
   placeholder?: string;
-  /** 1–60; clamped server-side. */
+  /** 1–60 (default 60). A value outside that range is refused with a 422. */
   max_length?: number;
 }
 
@@ -1105,7 +1179,11 @@ export interface Handoff {
 export interface RequestAckInput {
   /** What the human reads (required, ≤ 500 chars). */
   prompt: string;
-  /** Who to reach: `me` (the bound human, the default) or a user UUID. */
+  /**
+   * Who to reach: `me`, the bound human (the default). The bound human's own
+   * user id is accepted as an alias; any other id is refused with 403
+   * `target_not_permitted`.
+   */
   target?: string;
   /** Seconds until expiry. Clamped server-side to 120–86400; default 900. */
   expiresIn?: number;

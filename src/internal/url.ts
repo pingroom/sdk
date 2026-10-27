@@ -51,3 +51,21 @@ export function redactUrlInMessage(message: string, url: URL, rawUrl: string): s
   }
   return out;
 }
+
+/**
+ * Every request goes out with `redirect: 'manual'` (Cloudflare Workers throw
+ * on `'error'`), so a redirect comes back as a response instead of being
+ * followed. Refuse it: a 307/308 would replay pairing secrets, uploaded bytes
+ * or a webhook body to whatever origin `Location` names. Browsers report a
+ * manual redirect as an `opaqueredirect` with status 0; other runtimes return
+ * the 3xx itself.
+ */
+export function refuseRedirect(res: Response): void {
+  if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+    res.body?.cancel().catch(() => {});
+    throw new PingRoomError('Refusing to follow a redirect; credentials and request bodies are never forwarded.', {
+      code: 'redirect_refused',
+      status: res.status,
+    });
+  }
+}

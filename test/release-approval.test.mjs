@@ -169,10 +169,13 @@ test('whole-second decisions tolerate small server clock differences without ext
 });
 
 test('transport failure and malformed JSON never reach the action', async (t) => {
+  // A dropped connection is transient: the SDK retries the wait with backoff
+  // until the gate's own deadline ends it, and the action never starts.
   const disconnected = await fixture(t, { onWait() { throw new Error('simulated disconnected transport'); } });
-  await assert.rejects(releaseWithApproval(disconnected.input));
+  await assert.rejects(releaseWithApproval({ ...disconnected.input, timeoutMs: 1500 }), blocked('timeout'));
   assert.equal(disconnected.actions.length, 0);
-  assert.equal(disconnected.calls.length, 2);
+  assert.ok(disconnected.calls.length >= 3, `expected the wait to be retried, saw ${disconnected.calls.length} calls`);
+  assert.deepEqual(disconnected.calls.slice(1).map(({ method }) => method), Array(disconnected.calls.length - 1).fill('GET'));
   for (const stage of ['POST', 'GET']) {
     const f = await fixture(t);
     const offline = createOfflineClient();

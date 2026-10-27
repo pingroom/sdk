@@ -351,3 +351,19 @@ test('sendIncomingWebhook strips the webhook URL out of a wrapped fetch error', 
   assert.match(err.message, /https:\/\/example\.invalid\/\[redacted\]/);
   assert.match(err.message, /ENOTFOUND/, 'the useful part of the reason survives');
 });
+
+test('requireV2 refuses a delivery that carries only the legacy v1 signature', async () => {
+  // The replay the option closes: a captured body re-sent without its v2
+  // header and under a new delivery id still passes v1.
+  const replay = { payload: rawBody, signature: hex, timestamp, deliveryId: 'delivery-replayed', secret };
+  assert.equal(await verifyWebhookSignature(replay), true);
+  assert.equal(await verifyWebhookSignature({ ...replay, requireV2: true }), false);
+  assert.equal(await verifyWebhookSignature({ ...replay, signatureV2: null, requireV2: true }), false);
+});
+
+test('requireV2 accepts a valid v2 delivery and still rejects a bad one', async () => {
+  const delivery = { payload: rawBody, signature: hex, signatureV2: v2Hex, timestamp, deliveryId, secret, requireV2: true };
+  assert.equal(await verifyWebhookSignature(delivery), true);
+  assert.equal(await verifyWebhookSignature({ ...delivery, deliveryId: 'delivery-tampered' }), false);
+  assert.equal(await verifyWebhookSignature({ ...delivery, signatureV2: '0'.repeat(64) }), false);
+});

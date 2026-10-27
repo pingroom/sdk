@@ -30,16 +30,16 @@ for (const status of [307, 308]) {
     const client = new HttpClient({ baseUrl: source, token: 'fixture-token' });
     await assert.rejects(client.request('POST', '/auth', {
       auth: false, body: { assertion: 'fixture-identity-assertion' },
-    }), { code: 'network_error' });
+    }), { code: 'redirect_refused', status });
     await assert.rejects(client.request('POST', '/claim', {
       body: { email: 'fixture@example.test', otp: '123456' },
-    }), { code: 'network_error' });
+    }), { code: 'redirect_refused', status });
     const body = new FormData();
     body.append('file', new Blob(['fixture-private-attachment']), 'notes.txt');
-    await assert.rejects(client.request('POST', '/attachments', { body }), { code: 'network_error' });
+    await assert.rejects(client.request('POST', '/attachments', { body }), { code: 'redirect_refused', status });
     await assert.rejects(sendIncomingWebhook(`${source}/hook/fixture-secret`, {
       message: 'fixture-private-message',
-    }), { code: 'network_error' });
+    }), { code: 'redirect_refused', status });
     assert.deepEqual(received, []);
   });
 }
