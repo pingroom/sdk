@@ -118,8 +118,19 @@ export interface UploadAttachmentInput {
 
 export interface TriggerInput {
   /**
-   * Only the sources a device legitimately originates. `webhook`/`system` are
-   * stamped server-side and are rejected here.
+   * Only the sources a device legitimately originates; `webhook`/`system` are
+   * stamped server-side and are rejected here. `manual` (the default) presses
+   * the slot.
+   *
+   * `location` is the device-geofence source, not a press modifier. It is for
+   * the ROOM OWNER only and sends the owner's Location Ping (an "Arrived at
+   * {place}" or "Left {place}" Ping to every member, with no action number)
+   * INSTEAD of the quick action in the slot. A caller who is not the room owner
+   * gets `403 location_trigger_owner_only`; a room with no enabled location
+   * trigger (or none that listens for the reported crossing) gets
+   * `409 location_trigger_inactive`; the operator's Location Pings switch being
+   * off gets `403 feature_disabled`. `is_urgent` and `requires_ack` still apply
+   * to it. To press a Quick Ping leave this unset.
    */
   trigger_source?: 'manual' | 'location';
   /**
@@ -354,8 +365,16 @@ export interface AcknowledgementWaitResult {
 }
 
 export interface ListenInput {
+  /** Cursor (a notification id). Omit to start from the current head. */
   after?: string;
+  /**
+   * Seconds each poll holds the connection (0–30, default 20). Polls start at
+   * least 2.1 s apart after an empty answer, so `0` (or a proxy that answers
+   * early) cannot use up the wait route's 30-per-minute limit, which is shared
+   * with the human's other listeners.
+   */
   timeout?: number;
+  /** Max notifications per poll (1–100, default 50). */
   limit?: number;
   signal?: AbortSignal;
   /**

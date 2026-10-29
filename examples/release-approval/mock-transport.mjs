@@ -19,7 +19,8 @@ export function createOfflineClient({ decision = 'approve', onCreate, onWait, ti
       created = {
         ...request, id: 'offline-approval-1', status: 'pending', decision: null, decided_at: null,
         expires_at: new Date(Math.floor(Date.now() / 1000) * 1000 + request.ttl * 1000).toISOString(),
-        room_code: decodeURIComponent(target.pathname.split('/')[4]),
+        // The server upper-cases invite codes in the path and echoes that form.
+        room_code: decodeURIComponent(target.pathname.split('/')[4]).toUpperCase(),
       };
       response = onCreate ? await onCreate(structuredClone(created), init.signal) : created;
     } else if (init.method === 'GET' && target.pathname === '/api/agent/approvals/offline-approval-1/wait' && created) {

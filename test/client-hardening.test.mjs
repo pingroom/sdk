@@ -311,3 +311,66 @@ test('aborting listen during a backoff ends it quietly', async () => {
   assert.ok(performance.now() - started < 1000);
   assert.equal(requests.length, 1);
 });
+
+// --- SD-06 / SD-08: listen polls are spaced, and a malformed 2xx is not a ping feed ---
+
+test('listen({ timeout: 0 }) does not spin when the server answers at once', async () => {
+  const { pr, requests } = listenScript([{ body: { notifications: [], cursor: 'c0' } }]);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 300);
+  for await (const _ of pr.notifications.listen({ after: 'c0', timeout: 0, signal: controller.signal })) { /* none */ }
+  // The route allows 30 a minute per human, shared with their other listeners.
+  assert.equal(requests.length, 1);
+});
+
+test('listen starts empty polls at least 2.1 s apart, and re-polls a non-empty batch at once', async () => {
+  const { pr, requests } = listenScript([
+    { body: { notifications: [ping('a')], cursor: 'c1' } },
+    { body: { notifications: [], cursor: 'c1' } },
+    { body: { notifications: [], cursor: 'c1' } },
+  ]);
+  const controller = new AbortController();
+  const timer = setInterval(() => {
+    if (requests.length >= 3) controller.abort();
+  }, 20);
+  const got = [];
+  try {
+    for await (const n of pr.notifications.listen({ after: 'c0', timeout: 0, signal: controller.signal })) {
+      got.push(n.id);
+    }
+  } finally {
+    clearInterval(timer);
+  }
+  assert.deepEqual(got, ['a']);
+  assert.equal(requests.length, 3);
+  assert.ok(requests[1].at - requests[0].at < 500, 'a non-empty batch is followed by an immediate poll');
+  assert.ok(requests[2].at - requests[1].at >= 2090, `empty polls ${requests[2].at - requests[1].at} ms apart`);
+});
+
+test('listen turns a 2xx that is not a wait answer into invalid_response', async () => {
+  const bodies = [
+    { body: '<html>Please sign in to the hotspot</html>' },
+    { body: {} },
+    { body: { notifications: 'none', cursor: 'c1' } },
+    { body: { notifications: [null], cursor: 'c1' } },
+    { body: { notifications: [], cursor: 7 } },
+  ];
+  for (const step of bodies) {
+    const { pr, requests } = listenScript([step]);
+    await assert.rejects(
+      async () => {
+        for await (const _ of pr.notifications.listen({ after: 'c0' })) { /* none */ }
+      },
+      (error) => error instanceof PingRoomError && error.code === 'invalid_response' && error.status === 0,
+    );
+    assert.equal(requests.length, 1);
+  }
+  // The initial head read exists to obtain a cursor: one without it is invalid.
+  const head = listenScript([{ body: { notifications: [] } }]);
+  await assert.rejects(
+    async () => {
+      for await (const _ of head.pr.notifications.listen()) { /* none */ }
+    },
+    (error) => error instanceof PingRoomError && error.code === 'invalid_response',
+  );
+});

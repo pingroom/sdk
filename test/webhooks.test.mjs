@@ -367,3 +367,57 @@ test('requireV2 accepts a valid v2 delivery and still rejects a bad one', async 
   assert.equal(await verifyWebhookSignature({ ...delivery, deliveryId: 'delivery-tampered' }), false);
   assert.equal(await verifyWebhookSignature({ ...delivery, signatureV2: '0'.repeat(64) }), false);
 });
+
+// --- SD-03: a body parser that did not capture the raw bytes must be loud ---
+
+test('verifyWebhookSignature throws a TypeError, not false, for a payload that is not raw bytes', async () => {
+  // What `express.raw()` leaves behind when its `type` does not match
+  // `application/json`: `{}` on Express 4, `undefined` on Express 5. A parsed
+  // object is the same bug one step later.
+  for (const payload of [{}, undefined, null, JSON.parse(rawBody), [], 42, true]) {
+    await assert.rejects(
+      verifyWebhookSignature({ payload, signatureV2: v2Hex, timestamp, deliveryId, secret, requireV2: true }),
+      (error) => error instanceof TypeError && /raw request body/.test(error.message) && /express\.raw/.test(error.message),
+    );
+  }
+});
+
+test('a payload-type TypeError does not depend on the headers being valid', async () => {
+  await assert.rejects(
+    verifyWebhookSignature({ payload: {}, signature: 'nope', timestamp: 'nope', secret }),
+    TypeError,
+  );
+});
+
+test('verifyWebhookSignature accepts every kind of raw body and still returns false for a bad signature', async () => {
+  const bytes = Buffer.from(rawBody);
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  // A Buffer from Node's pool is a window onto a larger ArrayBuffer.
+  const pooled = Buffer.from(rawBody);
+  const padded = new Uint8Array(pooled.length + 16);
+  padded.set(pooled, 8);
+  for (const payload of [
+    rawBody,
+    bytes,
+    new Uint8Array(bytes),
+    arrayBuffer,
+    new DataView(arrayBuffer),
+    padded.subarray(8, 8 + pooled.length),
+  ]) {
+    assert.equal(await verifyWebhookSignature({ payload, signatureV2: v2Hex, timestamp, deliveryId, secret, requireV2: true }), true);
+    assert.equal(await verifyWebhookSignature({ payload, signatureV2: '0'.repeat(64), timestamp, deliveryId, secret, requireV2: true }), false);
+  }
+  // A typed array that is not bytes is read as bytes, never element by element.
+  const wide = new Uint16Array(new TextEncoder().encode(rawBody.padEnd(rawBody.length + (rawBody.length % 2), ' ')).buffer);
+  assert.equal(await verifyWebhookSignature({ payload: wide, signatureV2: v2Hex, timestamp, deliveryId, secret, requireV2: true }), rawBody.length % 2 === 0);
+});
+
+test('a payload-type TypeError is raised before the secret or any header is read', async () => {
+  const read = [];
+  const options = { payload: {} };
+  for (const key of ['secret', 'signature', 'signatureV2', 'timestamp', 'deliveryId', 'requireV2', 'maxAgeSeconds']) {
+    Object.defineProperty(options, key, { enumerable: true, get() { read.push(key); return key === 'secret' ? secret : undefined; } });
+  }
+  await assert.rejects(verifyWebhookSignature(options), TypeError);
+  assert.deepEqual(read, []);
+});

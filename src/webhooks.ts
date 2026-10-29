@@ -34,8 +34,13 @@ export const WEBHOOK_DELIVERY_HEADER = 'X-PingRoom-Delivery';
 export const WEBHOOK_EVENT_HEADER = 'X-PingRoom-Event';
 
 export interface VerifyWebhookSignatureOptions {
-  /** The raw request body — the exact bytes received, NOT a re-stringified object. */
-  payload: string | ArrayBuffer | Uint8Array;
+  /**
+   * The raw request body — the exact bytes received, NOT a re-stringified
+   * object. A string, an ArrayBuffer or a typed array/Buffer. Anything else
+   * (an `{}` or `undefined` from a JSON/raw body parser that did not capture
+   * the body) throws a TypeError rather than failing verification.
+   */
+  payload: string | ArrayBuffer | ArrayBufferView;
   /**
    * Legacy X-PingRoom-Signature value (with or without the `sha256=` prefix).
    * Tried only when `signatureV2` is absent and `requireV2` is not set.
@@ -66,8 +71,13 @@ export interface VerifyWebhookSignatureOptions {
  * Constant-time verification of an outgoing-webhook signature. Returns a
  * boolean and never throws on mismatch. Pass `requireV2: true` so a delivery
  * without the v2 signature is refused rather than checked against v1.
+ *
+ * Throws a TypeError when `payload` is not a string, ArrayBuffer or typed
+ * array: a body parser that did not capture the raw bytes is a bug in the
+ * receiver, and must not look the same as a forged signature.
  */
 export async function verifyWebhookSignature(opts: VerifyWebhookSignatureOptions): Promise<boolean> {
+  assertRawPayload(opts.payload);
   const hasV2Signature = opts.signatureV2 !== null && opts.signatureV2 !== undefined;
   if (opts.requireV2 === true && !hasV2Signature) {
     return false;
@@ -299,13 +309,32 @@ function normalizeDeliveryId(deliveryId: string | null | undefined): string | nu
     : null;
 }
 
-function signedMessage(prefixText: string, payload: string | ArrayBuffer | Uint8Array): Uint8Array {
+// `Object.prototype.toString` rather than `instanceof ArrayBuffer`: a buffer
+// from another realm (a test sandbox, a worker) is still the raw body.
+function isArrayBuffer(value: unknown): value is ArrayBuffer {
+  return Object.prototype.toString.call(value) === '[object ArrayBuffer]';
+}
+
+function assertRawPayload(payload: unknown): void {
+  if (typeof payload === 'string' || isArrayBuffer(payload) || ArrayBuffer.isView(payload)) {
+    return;
+  }
+  const received = payload === null ? 'null' : Array.isArray(payload) ? 'an array' : typeof payload;
+  throw new TypeError(
+    `verifyWebhookSignature: \`payload\` must be the raw request body as a string, ArrayBuffer or Buffer/Uint8Array, got ${received}. `
+    + 'Capture the raw bytes before any JSON parsing (for Express: express.raw({ type: \'application/json\' }) on this route).',
+  );
+}
+
+function signedMessage(prefixText: string, payload: string | ArrayBuffer | ArrayBufferView): Uint8Array {
   const enc = new TextEncoder();
   const prefix = enc.encode(prefixText);
   const body = typeof payload === 'string'
     ? enc.encode(payload)
-    : payload instanceof Uint8Array
-      ? payload
+    : ArrayBuffer.isView(payload)
+      // The view's own bytes: a Buffer is a window onto a larger pool, and a
+      // DataView or Int16Array must not be read element by element.
+      ? new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
       : new Uint8Array(payload);
   const message = new Uint8Array(prefix.byteLength + body.byteLength);
   message.set(prefix, 0);

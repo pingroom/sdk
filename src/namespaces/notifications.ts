@@ -1,9 +1,11 @@
 // `pr.notifications`: history, one-shot waits and the listen() iterator.
 
+import { PingRoomError } from '../errors.js';
 import type { HttpClient } from '../http.js';
 import { sleep } from '../internal/async.js';
 import { requireNonEmpty } from '../internal/guards.js';
 import { isTransientError, transientDelayMs } from '../internal/retry.js';
+import { isRecord } from '../internal/validate.js';
 import type {
   AcknowledgementWaitResult,
   AgentNotification,
@@ -16,7 +18,26 @@ import type {
   WaitInput,
   WaitResult,
 } from '../types.js';
-import { enc, dropUndefined, waitTimeoutMs } from '../internal/request.js';
+import { enc, dropUndefined, MIN_LISTEN_POLL_INTERVAL_MS, waitTimeoutMs } from '../internal/request.js';
+
+/**
+ * A 2xx that is not a wait answer (a captive portal's HTML, a proxy's error
+ * page served as 200) must not end `listen()` with a bare TypeError, nor
+ * advance its cursor.
+ */
+function validateListenResult(value: unknown, requireCursor: boolean): WaitResult {
+  if (
+    !isRecord(value)
+    || !Array.isArray(value['notifications'])
+    || value['notifications'].some((notification) => !isRecord(notification))
+    || (value['cursor'] === undefined ? requireCursor : typeof value['cursor'] !== 'string')
+  ) {
+    throw new PingRoomError('PingRoom returned an invalid notifications wait response.', {
+      code: 'invalid_response',
+    });
+  }
+  return value as unknown as WaitResult;
+}
 
 export class NotificationsApi {
   constructor(private readonly http: HttpClient) {}
@@ -80,8 +101,13 @@ export class NotificationsApi {
     let failures = 0;
     while (!input.signal?.aborted) {
       let result: WaitResult;
+      // The head read is an immediate answer by design; only polls ahead of
+      // the cursor are spaced.
+      const polledForward = headRead;
+      const pollStartedAt = Date.now();
       try {
-        result = headRead
+        // The head read exists to obtain a cursor, so it must carry one.
+        result = validateListenResult(headRead
           ? await this.wait({
             after: cursor,
             ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
@@ -90,7 +116,7 @@ export class NotificationsApi {
           })
           // No cursor yet: read the current head (an immediate, empty answer)
           // so only pings that land after this call are delivered.
-          : await this.wait({ timeout: 0, ...(input.signal ? { signal: input.signal } : {}) });
+          : await this.wait({ timeout: 0, ...(input.signal ? { signal: input.signal } : {}) }), !headRead);
       } catch (err) {
         if (input.signal?.aborted) {
           return;
@@ -111,8 +137,13 @@ export class NotificationsApi {
       for (const n of result.notifications) {
         yield n;
       }
-      // Yield between polls so timer-driven cancellation can run (see ApprovalsApi).
-      await sleep(0, input.signal);
+      // Yield between polls so timer-driven cancellation can run (see
+      // ApprovalsApi). After an empty answer also keep polls a floor apart, so
+      // `timeout: 0` or an early-answering proxy cannot spin the loop.
+      const spacingMs = polledForward && result.notifications.length === 0
+        ? Math.max(0, MIN_LISTEN_POLL_INTERVAL_MS - (Date.now() - pollStartedAt))
+        : 0;
+      await sleep(spacingMs, input.signal);
     }
   }
 }

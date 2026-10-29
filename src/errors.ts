@@ -37,7 +37,9 @@ export const ROOM_SCOPED_ERROR_CODES = [
  * Branch on `error.code` (and `error.status`) instead of the message.
  *
  * Authentication and schema-validation failures may have no machine code; use
- * `status` for those responses. This union covers every coded Handoff response.
+ * `status` for those responses. This union holds the codes specific to handoffs.
+ * Codes any route can answer (`rate_limited`, `feature_disabled`) are in
+ * {@link COMMON_ERROR_CODES}.
  *
  * Server: `AgentHandoffController`, `HandoffService`, `RequestIdempotency`, the
  * `agent.scope`/`agent.quota` middleware, and the `RecipientNotReady` /
@@ -98,7 +100,29 @@ export const QUICK_ACTION_ERROR_CODES = [
   'quick_action_layout_changed',
   // 409 — a time trigger, webhook, agent binding or running live update still uses the page.
   'quick_action_page_in_use',
+  // 403 — `actions.trigger()` with trigger_source 'location' from anyone but the room owner.
+  'location_trigger_owner_only',
+  // 409 — `actions.trigger()` with trigger_source 'location' in a room with no enabled
+  // location trigger, or one that does not listen for the reported crossing.
+  'location_trigger_inactive',
 ] as const;
+
+/**
+ * Codes any route can answer, whatever the surface, so they sit in no
+ * per-surface union.
+ *
+ * - `rate_limited` — 429, a route throttle (`throttle:N,1`). The body carries
+ *   `retry_after`. Per-surface limits answer their own 429 code instead
+ *   (`public_room_rate_limited`, `cooldown_active`), so retry any 429.
+ * - `feature_disabled` — 403, the operator switched the capability off for every
+ *   client (attachments, links, locations, questions, public rooms, Location
+ *   Pings, incoming webhooks, live progress, …). The body's `feature` names the
+ *   switch (for example `sending.attachments`). Retrying cannot succeed.
+ *
+ * Server: the `ThrottleRequestsException` renderer in `bootstrap/app.php` and
+ * `ClientFeatureGate` (the `feature:` middleware and the request-level gates).
+ */
+export const COMMON_ERROR_CODES = ['rate_limited', 'feature_disabled'] as const;
 
 /**
  * Request-size failures. The server answers every oversized `api/*` body with
@@ -106,6 +130,9 @@ export const QUICK_ACTION_ERROR_CODES = [
  * locally with `attachment_too_large` before any bytes are sent.
  */
 export const REQUEST_LIMIT_ERROR_CODES = ['payload_too_large', 'attachment_too_large'] as const;
+
+/** @see COMMON_ERROR_CODES */
+export type CommonErrorCode = (typeof COMMON_ERROR_CODES)[number];
 
 /** @see ROOM_SCOPED_ERROR_CODES */
 export type RoomScopedErrorCode = (typeof ROOM_SCOPED_ERROR_CODES)[number];
@@ -131,7 +158,8 @@ export type AgentErrorCode =
   | RoomScopedErrorCode
   | AgentInboxErrorCode
   | QuickActionErrorCode
-  | RequestLimitErrorCode;
+  | RequestLimitErrorCode
+  | CommonErrorCode;
 
 export interface PingRoomErrorInit {
   status?: number;

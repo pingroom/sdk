@@ -555,3 +555,129 @@ test('auth.waitForPairing retries a timed-out status poll', async () => {
   assert.equal(active.credential, 'active_token');
   assert.equal(pr.getToken(), 'active_token');
 });
+
+// --- SD-05: a re-pairing that never completes puts the working credential back ---
+
+/**
+ * A client that already holds WORKING and re-pairs. The status route answers
+ * from `statuses`; every call is recorded with the bearer it carried.
+ */
+function repairing({ statuses, pairToken = 'pair_re' } = {}) {
+  const bearers = [];
+  let polls = 0;
+  const fetchMock = async (url, init) => {
+    const path = new URL(url).pathname;
+    bearers.push(`${init.method} ${path} ${init.headers.Authorization ?? '-'}`);
+    if (path === '/api/agent/auth') {
+      return new Response(JSON.stringify({ credential: `PENDING-${bearers.length}`, credential_type: 'pre_claim', expires_in: 900, scopes: [] }), { status: 201 });
+    }
+    if (path === '/api/agent/auth/pair/start') {
+      return new Response(JSON.stringify({
+        pair_token: pairToken,
+        pair_url: `https://pingroom.io/app/agents/pair?token=${pairToken}`,
+        expires_in: 900,
+        poll_interval_ms: 1000,
+      }), { status: 201 });
+    }
+    if (path === '/api/agent/auth/pair/status') {
+      const next = statuses[Math.min(polls, statuses.length - 1)];
+      polls += 1;
+      return new Response(JSON.stringify(next));
+    }
+    if (path === '/api/agent/rooms') return new Response('[]');
+    return new Response('{}', { status: 404 });
+  };
+  return { bearers, pr: new PingRoom({ token: 'WORKING', fetch: fetchMock }) };
+}
+
+test('an expired re-pairing puts the previous working credential back', async () => {
+  const { bearers, pr } = repairing({ statuses: [{ status: 'expired' }] });
+  const pairing = await pr.auth.startPairing();
+  assert.match(pr.getToken(), /^PENDING-/);
+
+  await assert.rejects(
+    () => pr.auth.waitForPairing(pairing),
+    (e) => e instanceof PingRoomError && e.code === 'pairing_expired',
+  );
+
+  assert.equal(pr.getToken(), 'WORKING');
+  await pr.rooms.list();
+  assert.equal(bearers.at(-1), 'GET /api/agent/rooms Bearer WORKING');
+});
+
+test('an aborted re-pairing restores the working credential, and a later wait resumes the same pairing', async () => {
+  const { bearers, pr } = repairing({
+    statuses: [
+      { status: 'pending' },
+      { status: 'active', credential: 'ACTIVE', credential_type: 'active', expires_in: null, scopes: [], room: null },
+    ],
+  });
+  const pairing = await pr.auth.startPairing();
+  const pending = pr.getToken();
+
+  const controller = new AbortController();
+  const cancelled = new Error('stop waiting');
+  const waiting = pr.auth.waitForPairing(pairing, { signal: controller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  controller.abort(cancelled);
+  await assert.rejects(waiting, (e) => e === cancelled);
+  assert.equal(pr.getToken(), 'WORKING');
+
+  // The pairing itself is still live: waiting again polls with the pending
+  // credential and adopts the approval.
+  const active = await pr.auth.waitForPairing(pairing);
+  assert.equal(active.credential, 'ACTIVE');
+  assert.equal(pr.getToken(), 'ACTIVE');
+  const polls = bearers.filter((line) => line.startsWith('GET /api/agent/auth/pair/status'));
+  assert.ok(polls.length >= 2);
+  for (const line of polls) assert.equal(line.endsWith(`Bearer ${pending}`), true, line);
+});
+
+test('a pairing that expires after an abort leaves a fresh client without a token', async () => {
+  const bearers = [];
+  const fetchMock = async (url, init) => {
+    const path = new URL(url).pathname;
+    bearers.push(init.headers.Authorization ?? '-');
+    if (path === '/api/agent/auth') return new Response(JSON.stringify({ credential: 'PENDING', credential_type: 'pre_claim', expires_in: 900, scopes: [] }), { status: 201 });
+    if (path === '/api/agent/auth/pair/start') return new Response(JSON.stringify({ pair_token: 'p1', pair_url: 'https://pingroom.io/p', expires_in: 900, poll_interval_ms: 1000 }), { status: 201 });
+    return new Response(JSON.stringify({ status: 'expired' }));
+  };
+  const pr = new PingRoom({ fetch: fetchMock });
+  const pairing = await pr.auth.startPairing();
+  assert.equal(pr.getToken(), 'PENDING');
+  await assert.rejects(() => pr.auth.waitForPairing(pairing), (e) => e.code === 'pairing_expired');
+  assert.equal(pr.getToken(), null);
+});
+
+test('a second pairing falls back to the credential beneath the first, not the first pending one', async () => {
+  let registered = 0;
+  const fetchMock = async (url) => {
+    const path = new URL(url).pathname;
+    if (path === '/api/agent/auth') {
+      registered += 1;
+      return new Response(JSON.stringify({ credential: `PENDING-${registered}`, credential_type: 'pre_claim', expires_in: 900, scopes: [] }), { status: 201 });
+    }
+    if (path === '/api/agent/auth/pair/start') {
+      return new Response(JSON.stringify({ pair_token: `p${registered}`, pair_url: 'https://pingroom.io/p', expires_in: 900, poll_interval_ms: 1000 }), { status: 201 });
+    }
+    return new Response(JSON.stringify({ status: 'expired' }));
+  };
+  const pr = new PingRoom({ token: 'WORKING', fetch: fetchMock });
+  await pr.auth.startPairing();
+  const second = await pr.auth.startPairing();
+  assert.equal(pr.getToken(), 'PENDING-2');
+  await assert.rejects(() => pr.auth.waitForPairing(second), (e) => e.code === 'pairing_expired');
+  assert.equal(pr.getToken(), 'WORKING');
+});
+
+test('waiting on a pairing this client did not start leaves the token alone', async () => {
+  const { fetchMock } = recorder({
+    'GET /api/agent/auth/pair/status': () => ({ body: { status: 'expired' } }),
+  });
+  const pr = new PingRoom({ token: 'pending_token', fetch: fetchMock });
+  await assert.rejects(
+    () => pr.auth.waitForPairing({ pair_token: 'someone-elses', pair_url: 'https://pingroom.io/p', expires_in: 10, poll_interval_ms: 1000 }),
+    (e) => e.code === 'pairing_expired',
+  );
+  assert.equal(pr.getToken(), 'pending_token');
+});

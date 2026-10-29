@@ -138,8 +138,19 @@ test('a poll combined with a direct scope, a target or a typed answer fails befo
 test('new management and feed APIs remain typed for TypeScript callers', () => {
   const filename = fileURLToPath(new URL('./agent-contract.mts', import.meta.url));
   const source = `
-    import { PingRoom, sendIncomingWebhook, type AgentNotification, type Webhook, type RoomIconCatalog } from '../dist/index.js';
+    import { PingRoom, sendIncomingWebhook, type AgentErrorCode, type AgentNotification, type CommonErrorCode, type QuickActionErrorCode, type Webhook, type RoomIconCatalog } from '../dist/index.js';
     const pr = new PingRoom();
+    for (const typed of ['feature_disabled', 'rate_limited', 'location_trigger_owner_only', 'location_trigger_inactive'] as const) {
+      const shared: AgentErrorCode = typed;
+      void shared;
+    }
+    const common: CommonErrorCode = 'rate_limited';
+    const location: QuickActionErrorCode = 'location_trigger_inactive';
+    // @ts-expect-error a per-surface code is not a common one
+    const notCommon: CommonErrorCode = 'pro_required';
+    // @ts-expect-error the handoff-only vocabulary is not a catch-all string
+    const notTyped: AgentErrorCode = 'made_up_code';
+    void [common, location, notCommon, notTyped];
     const confirmed = await pr.broadcast('AB12', { message: 'Confirm', requires_ack: true, ack_mode: 'all' });
     await pr.actions.trigger('AB12', 1, { ack_mode: 'any' });
     const mode: 'any' | 'all' | undefined = confirmed.action_state?.mode;
@@ -212,11 +223,48 @@ test('confirmation modes reach broadcasts and quick actions while progress survi
   assert.equal(Object.hasOwn(JSON.parse(calls.at(-1).body), 'ack_mode'), false);
 });
 
-test('quick action and request-limit error codes are exported as runtime unions', async () => {
-  const { QUICK_ACTION_ERROR_CODES, REQUEST_LIMIT_ERROR_CODES } = await import('../dist/index.js');
+test('quick action, common and request-limit error codes are exported as runtime unions', async () => {
+  const { QUICK_ACTION_ERROR_CODES, COMMON_ERROR_CODES, REQUEST_LIMIT_ERROR_CODES } = await import('../dist/index.js');
   assert.deepEqual([...QUICK_ACTION_ERROR_CODES], [
     'quick_action_input_required', 'quick_action_input_type', 'action_not_configured',
     'pro_required', 'quick_action_layout_changed', 'quick_action_page_in_use',
+    // QuickActionDispatcher, the `location` branch of actions.trigger().
+    'location_trigger_owner_only', 'location_trigger_inactive',
   ]);
+  // Codes any route can answer: the ThrottleRequestsException renderer in
+  // bootstrap/app.php and ClientFeatureGate (the `feature:` middleware and the
+  // request-level gates of the Ping-creating requests).
+  assert.deepEqual([...COMMON_ERROR_CODES], ['rate_limited', 'feature_disabled']);
   assert.deepEqual([...REQUEST_LIMIT_ERROR_CODES], ['payload_too_large', 'attachment_too_large']);
+  for (const codes of [QUICK_ACTION_ERROR_CODES, COMMON_ERROR_CODES, REQUEST_LIMIT_ERROR_CODES]) {
+    assert.equal(new Set(codes).size, codes.length);
+    for (const code of codes) assert.match(code, /^[a-z][a-z0-9_]*$/);
+  }
+  // A common code belongs to no per-surface union.
+  const { HANDOFF_ERROR_CODES, ROOM_SCOPED_ERROR_CODES, AGENT_INBOX_ERROR_CODES } = await import('../dist/index.js');
+  for (const common of COMMON_ERROR_CODES) {
+    for (const codes of [HANDOFF_ERROR_CODES, ROOM_SCOPED_ERROR_CODES, AGENT_INBOX_ERROR_CODES, QUICK_ACTION_ERROR_CODES, REQUEST_LIMIT_ERROR_CODES]) {
+      assert.equal(codes.includes(common), false, `${common} is common, not per-surface`);
+    }
+  }
+});
+
+test('a location press from a non-owner or with no armed trigger surfaces its typed code', async () => {
+  const { QUICK_ACTION_ERROR_CODES } = await import('../dist/index.js');
+  const responses = [
+    [403, 'location_trigger_owner_only', 'Only the room owner can send a Location Ping'],
+    [409, 'location_trigger_inactive', 'Location trigger is not active'],
+    [403, 'feature_disabled', 'Location Pings are turned off.'],
+  ];
+  for (const [status, code, message] of responses) {
+    const pr = new PingRoom({
+      token: 't',
+      fetch: async () => new Response(JSON.stringify({ message, code, ...(code === 'feature_disabled' ? { feature: 'triggers.location' } : {}) }), { status }),
+    });
+    await assert.rejects(
+      () => pr.actions.trigger('AB12', 1, { trigger_source: 'location' }),
+      (error) => error instanceof PingRoomError && error.status === status && error.code === code,
+    );
+    assert.equal(code === 'feature_disabled' || QUICK_ACTION_ERROR_CODES.includes(code), true, `${code} is typed`);
+  }
 });

@@ -24,6 +24,14 @@ const DEFAULT_WAIT_SECONDS = 20;
  */
 export const MIN_HANDOFF_POLL_INTERVAL_MS = 2100;
 /**
+ * Minimum spacing between the starts of two `listen()` polls after an empty
+ * answer. `notifications/wait` is throttled at 30 requests a minute per human,
+ * shared with every other listener on the account (the CLI, other agents); a
+ * zero hold or a proxy that answers early would otherwise spin the loop and
+ * keep that bucket exhausted. Same floor as the handoff wait.
+ */
+export const MIN_LISTEN_POLL_INTERVAL_MS = MIN_HANDOFF_POLL_INTERVAL_MS;
+/**
  * Minimum spacing between the starts of two approval or question wait polls.
  * The server normally holds each one, but a proxy or a zero hold that answers
  * `pending` at once would otherwise spin the loop and keep the human's shared

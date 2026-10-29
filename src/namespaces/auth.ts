@@ -48,8 +48,21 @@ function normalizePairingLinks(value: unknown): { latest_pings: string; install_
   };
 }
 
+/**
+ * The credential a pairing swapped in, and the one to hand back when it ends
+ * without an approval. Held by `pair_token`, so a PairingStart that was only
+ * copied or re-serialised still finds it.
+ */
+interface PendingPairing {
+  pairToken: string;
+  pending: string;
+  previous: string | null;
+}
+
 /** Agent credential lifecycle (auth.md flow). */
 export class AuthApi {
+  private pairing: PendingPairing | null = null;
+
   constructor(private readonly http: HttpClient) {}
 
   /** Register an agent. Anonymous or via an identity assertion (ID-JAG / verified email). Public. */
@@ -75,7 +88,10 @@ export class AuthApi {
    * Register a pending agent and create a short-lived link that opens the
    * PingRoom app. The server owns the full grant shown to the approver; this
    * client sends no scope list. The pending credential stays private inside the
-   * client and is replaced automatically once waitForPairing() succeeds.
+   * client and is replaced automatically once waitForPairing() succeeds. If the
+   * client already held a credential, it is put back when the pairing expires
+   * or the wait is aborted, so a re-pairing that never completes leaves the
+   * client on the working credential rather than the dead pending one.
    */
   async startPairing(params: StartPairingParams = {}): Promise<PairingStart> {
     const previousToken = this.http.getToken();
@@ -86,9 +102,19 @@ export class AuthApi {
     this.http.setToken(pending.credential);
 
     try {
-      return await this.http.request('POST', '/api/agent/auth/pair/start', {
+      const started = await this.http.request<PairingStart>('POST', '/api/agent/auth/pair/start', {
         body: {},
       });
+      // A second pairing started while the first is still pending falls back
+      // to the credential beneath it, not to the first pairing's pending one.
+      this.pairing = {
+        pairToken: started.pair_token,
+        pending: pending.credential,
+        previous: this.pairing !== null && this.pairing.pending === previousToken
+          ? this.pairing.previous
+          : previousToken,
+      };
+      return started;
     } catch (error) {
       if (this.http.getToken() === pending.credential) {
         this.http.setToken(previousToken);
@@ -106,11 +132,42 @@ export class AuthApi {
    * Wait until the person approves in PingRoom, or the short-lived link
    * expires. Transient network, 429, and 5xx failures are retried inside the
    * server-provided lifetime. On success the client immediately starts using
-   * the active credential returned by the server.
+   * the active credential returned by the server. When the link expires or the
+   * wait is aborted, the credential the client held before startPairing() is
+   * restored; calling waitForPairing() again after an abort resumes the same
+   * pairing.
    */
   async waitForPairing(
     pairing: PairingStart,
     options: WaitForPairingOptions = {},
+  ): Promise<PairedCredential> {
+    const tracked = this.pairing !== null && this.pairing.pairToken === pairing.pair_token
+      ? this.pairing
+      : null;
+    if (tracked !== null && this.http.getToken() === tracked.previous) {
+      // Resuming after an abort put the earlier credential back.
+      this.http.setToken(tracked.pending);
+    }
+    try {
+      const paired = await this.pollPairing(pairing, options);
+      if (tracked !== null && this.pairing === tracked) this.pairing = null;
+      return paired;
+    } catch (error) {
+      if (tracked !== null && this.pairing === tracked) {
+        const expired = error instanceof PingRoomError && error.code === 'pairing_expired';
+        if (expired || options.signal?.aborted === true) {
+          if (this.http.getToken() === tracked.pending) this.http.setToken(tracked.previous);
+        }
+        // An expired pairing cannot be resumed; an aborted one can.
+        if (expired) this.pairing = null;
+      }
+      throw error;
+    }
+  }
+
+  private async pollPairing(
+    pairing: PairingStart,
+    options: WaitForPairingOptions,
   ): Promise<PairedCredential> {
     const lifetimeMs = Math.max(1, Number(pairing.expires_in) || 900) * 1000;
     const requestedInterval = options.pollIntervalMs ?? pairing.poll_interval_ms;

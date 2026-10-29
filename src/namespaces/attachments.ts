@@ -19,7 +19,8 @@ function attachmentByteLength(content: UploadAttachmentInput['content']): number
  * Private files that a Ping or Question can carry.
  *
  * Upload first, then pass the returned ids to `broadcast()` / `questions.ask()`
- * as `attachment_ids`. Bytes never travel over MCP or a JSON ping body. An
+ * as `attachment_ids`. Bytes never travel inside a JSON ping body (the MCP
+ * `upload_attachment` tool takes only small files, about 90 KiB, as base64). An
  * upload that is never attached expires on its own after 24 hours.
  * Each file must be 1 byte–5 MiB with an md/pdf/html/txt/jpg/jpeg/png/zip filename;
  * a Ping or Question accepts at most four ids.

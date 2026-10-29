@@ -290,3 +290,13 @@ test('offline demo scenarios ignore real-looking environment credentials and nev
   }
   assert.equal(new URL(DEMO_ORIGIN).hostname.endsWith('.invalid'), true);
 });
+
+// SD-04: the server upper-cases invite codes and echoes the upper-case form.
+test('a lower-case room code is normalised before the request, so the echoed code still matches', async (t) => {
+  const f = await fixture(t);
+  f.input.room = 'demo';
+  const result = await releaseWithApproval(f.input);
+  assert.equal(result.outcome, 'executed');
+  assert.equal(f.actions.length, 1);
+  assert.equal(f.calls[0].path, '/api/agent/rooms/DEMO/approvals');
+});

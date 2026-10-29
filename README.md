@@ -12,6 +12,8 @@ One typed client for everything an agent does: authenticate, create and join roo
 npm install @pingroom/sdk
 ```
 
+The package is ESM-only. `import` it, or `await import('@pingroom/sdk')` from CommonJS. `require('@pingroom/sdk')` also works on Node ≥ 20.19 and ≥ 22.12, which can require an ES module; on an older Node 20.x it fails with `ERR_REQUIRE_ESM`.
+
 ## Quick start
 
 ```ts
@@ -53,7 +55,11 @@ the first result instead of pinging the human twice. The SDK sends it as the
 `Idempotency-Key` header, never in the body. A key is 1–255 printable ASCII
 characters, spaces included, and surrounding whitespace is trimmed as the
 server does. Anything else, such as an emoji or Cyrillic, is refused before
-sending with `invalid_request`, because it cannot travel as a header.
+sending with `invalid_request`, because it cannot travel as a header. An empty
+key (`''`) is `invalid_request` on `broadcast()`, `actions.trigger()`,
+`approvals.request()` and `questions.ask()`; on `handoffs.*` and
+`sendIncomingWebhook()` it is kept as it always was, meaning "no key", so pass
+`undefined` rather than an empty string when you have none.
 
 ```ts
 await pr.broadcast('ab12cd', { message: 'Deploy shipped ✅', idempotencyKey: 'deploy-1.4.0-shipped' });
@@ -113,7 +119,9 @@ Latitude must be within -90..90 and longitude within -180..180. `label` is
 limited to 100 Unicode characters and `address` to 255. Recipients can share
 the point or open it in an installed maps app. When reading pings,
 `extractLocationPing(ping.data)` returns the validated location or `null` for
-legacy or malformed data.
+legacy or malformed data. (This is a point carried in a ping's `data`, not the
+geofence source `trigger_source: 'location'` described under
+[Rooms & quick actions](#rooms--quick-actions).)
 
 > Security note: an agent credential is a bearer token. Keep it server-side. Do not embed a long-lived token in a browser bundle or a public client.
 
@@ -183,6 +191,11 @@ principal; it does not impersonate the owner's personal PingRoom profile.
 
 `waitForPairing()` tolerates short network outages and stops when the app link
 expires. Pass an `AbortSignal` when your process needs its own cancellation.
+If the client already held a credential when you called `startPairing()`, that
+credential is put back when the link expires or the wait is aborted, so a
+re-pairing that never completes does not leave the client on the dead pending
+credential. Calling `waitForPairing()` again after an abort resumes the same
+pairing.
 Pairing grants are server-authoritative. `startPairing()` sends no scope array,
 so an older installed SDK cannot accidentally mint a partial credential when
 the service adds a capability. The deprecated `scopes` option is accepted for
@@ -248,10 +261,8 @@ await pr.actions.updateMany('ab12cd', [
   { action_number: 2, label: 'Reject', icon: '❌' },
 ]);
 
-// One-shot modifiers on a single press. `trigger_source` is `manual` (default)
-// or `location`; `webhook`/`system` are stamped server-side and rejected here.
+// One-shot modifiers on a single press.
 await pr.actions.trigger('ab12cd', 1, {
-  trigger_source: 'location',
   is_urgent: true,
   requires_ack: true,
 });
@@ -261,6 +272,18 @@ await pr.actions.trigger('ab12cd', 1, {
 only **add** an acknowledgement requirement for that one press — passing `false`
 never removes one from an action already configured to require it. Neither
 modifier edits the action's saved configuration.
+
+`trigger_source` is `manual` (the default) or `location`; `webhook`/`system` are
+stamped server-side and rejected here. **Leave it unset to press a Quick Ping.**
+`location` is the device-geofence source, not a press modifier: it is for the
+**room owner only** and sends the owner's Location Ping (an "Arrived at
+{place}" or "Left {place}" Ping to every member, with no action number)
+**instead of** the quick action in that slot, so the slot's label, sound and
+acknowledgement policy are not used. A caller who is not the room owner gets
+`403 location_trigger_owner_only`; a room with no enabled location trigger (or
+none that listens for the reported crossing) gets `409 location_trigger_inactive`;
+the operator's Location Pings switch being off gets `403 feature_disabled`. In
+none of those cases does the slot's quick action fire.
 
 ### Quick actions that need a detail
 
@@ -272,7 +295,8 @@ refused with `422 quick_action_input_required` and nothing is sent.
 ```ts
 await pr.actions.update('ab12cd', 2, { label: 'Where are you?', icon: '📍', input_type: 'location' });
 
-const [action] = await pr.actions.list('ab12cd'); // action.input_type === 'location'
+const action = (await pr.actions.list('ab12cd')).find((a) => a.action_number === 2);
+if (!action) throw new Error('Slot 2 is not configured.'); // action.input_type === 'location'
 await pr.actions.trigger('ab12cd', 2, {
   quick_action_id: action.id, // refused with 409 quick_action_layout_changed if the slot moved pages
   data: { location: { latitude: 25.2048, longitude: 55.2708, label: 'Dubai Mall' } },
@@ -339,9 +363,10 @@ Updating with `regenerate_secret: true` returns a new URL and revokes the old on
 ## Attachments
 
 Send the file itself, not a link to it. Upload first, then pass the ids to any
-send. Bytes never travel over MCP or a JSON ping body, and the returned metadata
+send. Bytes never travel inside a JSON ping body, and the returned metadata
 never carries a permanent URL — recipients read the content back through an
-authenticated endpoint.
+authenticated endpoint. (The MCP `upload_attachment` tool takes small files as
+base64, up to about 90 KiB; this method has no such limit below 5 MiB.)
 
 ```ts
 const report = await pr.attachments.upload({
@@ -422,7 +447,13 @@ for await (const ping of pr.notifications.listen({ signal: ac.signal })) {
 and 5xx) with a backoff that starts at `backoffMs` (default 1 s), doubles up to
 30 s, and waits out a server `retryAfter`. Pass `onError` to observe those
 retries. Any other failure, such as a 401 after the credential is revoked or a
-403, ends the iterator by throwing, with or without `onError`.
+403, ends the iterator by throwing, with or without `onError`. A 2xx that is not
+a wait answer (a captive portal's page, say) ends it with `invalid_response`.
+
+Polls after an empty answer start at least 2.1 seconds apart, so `timeout: 0`,
+or a proxy that answers early, cannot use up the wait route's 30-per-minute
+limit, which is shared with the human's other listeners (the CLI, other agents).
+The default 20-second hold is unaffected.
 
 Or a single long-poll. Without `after`, `wait()` answers at once with no pings
 and the current head cursor, so pass the cursor from a previous call:
@@ -533,8 +564,8 @@ const answered = await pr.questions.waitForAnswer(q.id);
 
 switch (answered.state) {
   case 'answered':
-    console.log(`${answered.answer.responder?.display_name} chose ${answered.answer.value}`);
-    // → answered.answer.value is 'prod' | 'staging' | 'cancel'
+    console.log(`${answered.answer?.responder?.display_name} chose ${answered.answer?.value}`);
+    // → answered.answer?.value is 'prod' | 'staging' | 'cancel'
     break;
   case 'expired':   /* nobody answered in time */ break;
   case 'cancelled': /* the asker withdrew it */   break;
@@ -632,7 +663,9 @@ callback cannot rewrite the required receipt-before-answer sequence. It throws
 `answered_without_completion`. Expiry and cancellation throw the same domain
 error with their corresponding reasons. Caller aborts reject with the signal's
 reason. None of these paths revoke or change the client's active credential.
-Network/API errors remain `PingRoomError`. Use
+A transient wait failure (a dropped connection, a request timeout, a 429 or a
+5xx) is retried with backoff until `overallTimeoutMs`; any other API error
+remains a `PingRoomError`. Use
 `pr.inbox.ensure()` directly when you only want to create or inspect the
 onboarding Question without waiting. Call `activate()` again after an expired,
 cancelled, or `answered_without_completion` result; the server replays a viable
@@ -687,7 +720,10 @@ A room's incoming-webhook URL carries its own secret — ideal for CI/deploy hoo
 ```ts
 import { sendIncomingWebhook } from '@pingroom/sdk';
 
-await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL, {
+const webhookUrl = process.env.PINGROOM_WEBHOOK_URL;
+if (!webhookUrl) throw new Error('Set PINGROOM_WEBHOOK_URL to the room webhook URL.');
+
+await sendIncomingWebhook(webhookUrl, {
   message: 'Build #42 passed',
   data: { commit: 'abc123' },
   requires_ack: true,
@@ -700,7 +736,10 @@ await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL, {
 See [Live Activities](#live-activities) below for the full picture. From a webhook, put `live_status` at the **top level** of the payload:
 
 ```ts
-await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL, {
+const webhookUrl = process.env.PINGROOM_WEBHOOK_URL;
+if (!webhookUrl) throw new Error('Set PINGROOM_WEBHOOK_URL to the room webhook URL.');
+
+await sendIncomingWebhook(webhookUrl, {
   message: 'Deploying v1.4.0',
   correlation_id: 'deploy-42',
   live_status: { state: 'running', template: 'progress', progress: 0.4 },
@@ -730,8 +769,10 @@ await pr.live.push('AB12CD', liveStatus.progress('deploy-42', {
 
 // B. A room's incoming webhook (Pro) — no token. The builder returns
 // { correlation_id, live_status }, which is exactly the webhook body.
+const webhookUrl = process.env.PINGROOM_WEBHOOK_URL;
+if (!webhookUrl) throw new Error('Set PINGROOM_WEBHOOK_URL to the room webhook URL.');
 await sendIncomingWebhook(
-  process.env.PINGROOM_WEBHOOK_URL,
+  webhookUrl,
   liveStatus.progress('deploy-42', {
     state: 'running',
     message: 'Building image',
@@ -822,10 +863,12 @@ import {
 const signingSecret = process.env.PINGROOM_SIGNING_SECRET;
 if (!signingSecret) throw new Error('Set PINGROOM_SIGNING_SECRET to the webhook signing_secret.');
 
-// Express example — capture the raw body (e.g. express.raw())
-app.post('/pingroom', async (req, res) => {
+// Express example. PingRoom sends `Content-Type: application/json`, which
+// express.raw() ignores unless you name the type, so pass it on this route and
+// keep it ahead of any express.json().
+app.post('/pingroom', express.raw({ type: 'application/json' }), async (req, res) => {
   const ok = await verifyWebhookSignature({
-    payload: req.body,                          // a Buffer/string of the RAW body
+    payload: req.body,                          // a Buffer of the RAW body
     signature: req.get(WEBHOOK_SIGNATURE_HEADER),
     signatureV2: req.get(WEBHOOK_SIGNATURE_V2_HEADER),
     timestamp: req.get(WEBHOOK_TIMESTAMP_HEADER),
@@ -838,6 +881,13 @@ app.post('/pingroom', async (req, res) => {
   res.status(204).end();
 });
 ```
+
+`verifyWebhookSignature` returns `false` for a signature that does not match, and
+**throws a `TypeError`** when `payload` is not a string, `ArrayBuffer` or
+`Buffer`/typed array. That is what a body parser that did not capture the raw
+bytes leaves behind (`{}` on Express 4, `undefined` on Express 5, a parsed
+object after `express.json()`), and it is a bug in the receiver, not a forged
+delivery, so it is not reported as `false`.
 
 ## Redeem a gift or promotional code
 
@@ -915,9 +965,10 @@ surface, so you can branch exhaustively:
 | `HandoffErrorCode` / `HANDOFF_ERROR_CODES` | `handoffs.*` |
 | `RoomScopedErrorCode` / `ROOM_SCOPED_ERROR_CODES` | every call whose path names a room (`rooms.get`, `actions.*`, `broadcast`, `webhooks.*`, `live.*`) |
 | `AgentInboxErrorCode` / `AGENT_INBOX_ERROR_CODES` | `inbox.ensure()` / `inbox.activate()` |
-| `QuickActionErrorCode` / `QUICK_ACTION_ERROR_CODES` | `actions.*` and a `broadcast()` naming an `action_number`: `quick_action_input_required`, `quick_action_input_type`, `action_not_configured`, `pro_required`, `quick_action_layout_changed`, `quick_action_page_in_use` |
+| `QuickActionErrorCode` / `QUICK_ACTION_ERROR_CODES` | `actions.*` and a `broadcast()` naming an `action_number`: `quick_action_input_required`, `quick_action_input_type`, `action_not_configured`, `pro_required`, `quick_action_layout_changed`, `quick_action_page_in_use`; and, on `actions.trigger()` with `trigger_source: 'location'` only, `location_trigger_owner_only` (403) and `location_trigger_inactive` (409) |
+| `CommonErrorCode` / `COMMON_ERROR_CODES` | any call: `rate_limited` (429, a route throttle; carries `retryAfter`) and `feature_disabled` (403, the operator switched the capability off; `error.body.feature` names the switch, for example `sending.attachments`, and retrying cannot succeed) |
 | `RequestLimitErrorCode` / `REQUEST_LIMIT_ERROR_CODES` | `payload_too_large` (HTTP 413 from the server on any oversized body) and `attachment_too_large` (raised locally by `attachments.upload()` above 5 MiB, before any bytes travel) |
-| `AgentErrorCode` | all five, for one shared branch |
+| `AgentErrorCode` | all six, for one shared branch |
 
 ## Configuration
 
@@ -925,7 +976,7 @@ surface, so you can branch exhaustively:
 new PingRoom({
   token: '...',                         // agent credential (optional for public reads)
   baseUrl: 'https://api.pingroom.io',   // or env PINGROOM_API_URL / PINGROOM_BASE_URL
-  timeoutMs: 30000,                     // long-poll calls extend this automatically
+  timeoutMs: 30000,                     // per-request deadline; a long-poll call (wait, listen, waitFor*) uses its own hold time + 10 s instead
   fetch: customFetch,                   // inject a fetch (tests / non-global-fetch runtimes)
   allowInsecure: false,                 // allow plain-http base URLs (off by default)
 });

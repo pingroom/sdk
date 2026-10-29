@@ -246,13 +246,83 @@ test('inbox.activate propagates ensure and wait API errors', async () => {
       body: inboxEnsureBody(),
     }),
     'GET /api/agent/handoffs/q-onboard/wait': () => ({
-      status: 503,
-      body: { code: 'temporarily_unavailable', message: 'Try again.' },
+      status: 403,
+      body: { code: 'insufficient_scope', message: 'Reconnect with more scope.' },
     }),
   });
   const waitFailure = new PingRoom({ token: 't', fetch: fetchMock });
   await assert.rejects(
     () => waitFailure.inbox.activate({ timeout: 2, overallTimeoutMs: 500 }),
-    (error) => error instanceof PingRoomError && error.code === 'temporarily_unavailable' && error.status === 503,
+    (error) => error instanceof PingRoomError && error.code === 'insufficient_scope' && error.status === 403,
   );
+});
+
+// SD-08: the handoff wait shares a 30/min bucket per human; one 429, 5xx or
+// dropped connection must not end a two-minute activation.
+test('inbox.activate retries a transient wait failure instead of ending the activation', async () => {
+  const failures = [
+    { status: 429, body: { code: 'rate_limited', message: 'Too Many Attempts.', retry_after: 0 } },
+    { status: 503, body: {} },
+    { throws: new TypeError('fetch failed') },
+  ];
+  for (const failure of failures) {
+    let waits = 0;
+    const pr = new PingRoom({
+      token: 't',
+      fetch: async (url) => {
+        if (new URL(url).pathname === '/api/agent/inbox/ensure') {
+          return new Response(JSON.stringify(inboxEnsureBody()));
+        }
+        waits += 1;
+        if (waits === 1) {
+          if (failure.throws) throw failure.throws;
+          return new Response(JSON.stringify(failure.body), { status: failure.status });
+        }
+        return new Response(JSON.stringify(answeredActivation({ activation_completed: true })));
+      },
+    });
+    const activation = await pr.inbox.activate({ timeout: 1, overallTimeoutMs: 10_000 });
+    assert.equal(activation.activation_completed, true);
+    assert.equal(waits, 2);
+  }
+});
+
+test('inbox.activate keeps retrying transient wait failures only until its overall deadline', async () => {
+  let waits = 0;
+  const pr = new PingRoom({
+    token: 't',
+    fetch: async (url) => {
+      if (new URL(url).pathname === '/api/agent/inbox/ensure') {
+        return new Response(JSON.stringify(inboxEnsureBody()));
+      }
+      waits += 1;
+      return new Response('{}', { status: 503 });
+    },
+  });
+  const started = performance.now();
+  await assert.rejects(
+    () => pr.inbox.activate({ timeout: 1, overallTimeoutMs: 250 }),
+    (error) => error instanceof PingRoomActivationIncompleteError && error.reason === 'deadline_exceeded',
+  );
+  assert.equal(waits, 1);
+  assert.ok(performance.now() - started < 1500);
+});
+
+test('inbox.activate still surfaces a malformed wait body as a permanent error', async () => {
+  let waits = 0;
+  const pr = new PingRoom({
+    token: 't',
+    fetch: async (url) => {
+      if (new URL(url).pathname === '/api/agent/inbox/ensure') {
+        return new Response(JSON.stringify(inboxEnsureBody()));
+      }
+      waits += 1;
+      return new Response(JSON.stringify({ id: 'someone-else', kind: 'question', state: 'pending' }));
+    },
+  });
+  await assert.rejects(
+    () => pr.inbox.activate({ overallTimeoutMs: 2000 }),
+    (error) => error instanceof PingRoomError && error.code === 'inbox_invalid_response',
+  );
+  assert.equal(waits, 1);
 });

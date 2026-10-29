@@ -68,11 +68,14 @@ test('immediately pending handoff polls allow timer-driven cancellation', () => 
 });
 
 test('immediately empty listen batches allow timer-driven cancellation', () => {
+  // Empty polls are spaced 2.1 s apart, so the abort lands inside that wait:
+  // it must end the wait early rather than after the next poll.
   const result = abortableLoop(
     { notifications: [], cursor: 'c1' },
     `for await (const _ of client.notifications.listen({ after: 'c0', signal: controller.signal })) {}`,
+    { abortAtPoll: 1 },
   );
   assert.equal(result.cancelled, true);
   assert.equal(result.threw, false);
-  assert.ok(result.polls >= 2);
+  assert.equal(result.polls, 1);
 });

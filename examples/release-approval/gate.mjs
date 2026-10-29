@@ -106,6 +106,10 @@ export async function releaseWithApproval({ client, room, artifactPath, destinat
     || typeof room !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(room)) {
     block('invalid_input', 'Supply a client, room, artifact path, callback, and a 1–300000 ms timeout.');
   }
+  // The server upper-cases invite codes (`ab12cd` and `AB12CD` are one room)
+  // and echoes the upper-case form. Normalise first, or the approval would be
+  // created, shown to the human, and then refused by verifyBinding below.
+  const roomCode = room.toUpperCase();
   const artifactName = label(basename(artifactPath), 'Artifact name');
   label(destination, 'Destination');
   const controller = new AbortController();
@@ -134,12 +138,12 @@ export async function releaseWithApproval({ client, room, artifactPath, destinat
     const sha256 = digest(await bounded(() => snapshot(artifactPath)));
     const question = `Release ${artifactName} to ${destination}?\nSHA-256: ${sha256}\nApprove only these exact bytes and this destination.`;
     if (Array.from(question).length > 500) block('invalid_input', 'The approval question exceeds 500 characters.');
-    const expected = { room, artifactName, destination, sha256, question, correlationId: `release-${randomUUID()}` };
+    const expected = { room: roomCode, artifactName, destination, sha256, question, correlationId: `release-${randomUUID()}` };
     const ttl = Math.max(60, Math.ceil(timeoutMs / 1000));
     const requestedAt = Date.now();
     // request() has no AbortSignal parameter. The local race bounds waiting,
     // but a timed-out create may still produce a remote request that expires.
-    const created = await bounded(() => client.approvals.request(room, {
+    const created = await bounded(() => client.approvals.request(roomCode, {
       question, title: 'Release approval', options: [...OPTIONS], ttl,
       correlation_id: expected.correlationId,
       data: { artifact_name: artifactName, sha256, destination },

@@ -55,7 +55,9 @@ approver. The request also carries that context in `data`.
 
 The gate checks the created approval and the final response against the saved
 request. A response must match the approval ID, room, correlation ID, question,
-options, artifact context, and original expiry. Only `status: "decided"` with
+options, artifact context, and original expiry. The room code is upper-cased
+first, the way the server resolves and echoes it, so `ab12cd` and `AB12CD` name
+the same room. Only `status: "decided"` with
 the exact decision `"approve"` can proceed. Denial, expiry, malformed responses,
 unrecognized states, cancellation, and timeouts block the callback.
 

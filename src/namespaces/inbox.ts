@@ -3,6 +3,7 @@
 import { PingRoomActivationIncompleteError, PingRoomError } from '../errors.js';
 import type { HttpClient } from '../http.js';
 import { combineSignals, sleep, throwIfAborted } from '../internal/async.js';
+import { isTransientError, transientDelayMs } from '../internal/retry.js';
 import type {
   AgentInboxEnsureResult,
   AgentInboxActivateInput,
@@ -168,18 +169,35 @@ export class InboxApi {
       const ensured = validateInboxEnsure(await this.ensure({ signal }));
       const questionId = ensured.question.id;
 
+      let failures = 0;
       for (;;) {
         throwIfAborted(signal);
         const pollStartedAt = Date.now();
-        const question = validateInboxWait(await this.http.request<unknown>(
-          'GET',
-          `/api/agent/handoffs/${enc(questionId)}/wait`,
-          {
-            query: dropUndefined({ timeout: input.timeout }),
-            timeoutMs: waitTimeoutMs(input.timeout),
-            signal,
-          },
-        ), questionId);
+        let question: Handoff;
+        try {
+          question = validateInboxWait(await this.http.request<unknown>(
+            'GET',
+            `/api/agent/handoffs/${enc(questionId)}/wait`,
+            {
+              query: dropUndefined({ timeout: input.timeout }),
+              timeoutMs: waitTimeoutMs(input.timeout),
+              signal,
+            },
+          ), questionId);
+        } catch (error) {
+          // A dropped connection, a request deadline, a 429 (the wait routes
+          // share one 30/min bucket per human) or a 5xx is not an outcome:
+          // retry it like every other wait, inside the overall deadline.
+          // Anything else is permanent and surfaces.
+          throwIfAborted(signal);
+          if (!isTransientError(error)) {
+            throw error;
+          }
+          failures += 1;
+          await sleep(transientDelayMs(error, failures), signal);
+          continue;
+        }
+        failures = 0;
         throwIfAborted(signal);
 
         if (question.state === 'pending') {
