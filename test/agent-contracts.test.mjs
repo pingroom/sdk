@@ -156,6 +156,12 @@ test('new management and feed APIs remain typed for TypeScript callers', () => {
     const mode: 'any' | 'all' | undefined = confirmed.action_state?.mode;
     const count: number | undefined = confirmed.action_state?.confirmed_count;
     const total: number | undefined = confirmed.action_state?.required_count;
+    const reach = confirmed.confirmation_reach;
+    const unreachable: number | undefined = reach?.checked ? reach.unavailable_count : undefined;
+    const unreachableIds: string[] | undefined = reach?.checked ? reach.unavailable_user_ids : undefined;
+    // @ts-expect-error nothing was checked, so there is no list to read
+    if (reach && !reach.checked) void reach.unavailable_user_ids;
+    void [unreachable, unreachableIds];
     // @ts-expect-error unsupported confirmation rule
     pr.broadcast('AB12', { message: 'Confirm', ack_mode: 'majority' });
     const page = await pr.notifications.list({ limit: 25, page: 2 });

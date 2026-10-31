@@ -223,6 +223,16 @@ export interface ActionState {
   dismissed_at?: string | null;
 }
 
+/**
+ * Who cannot show Confirm for this ping. A recipient with no capable device
+ * gets a plain alert, so their confirmation may never come. `checked: false`
+ * means nothing was checked (public rooms, rooms over 100 recipients, a failed
+ * lookup), not that everyone is reachable. Absent unless `requires_ack`.
+ */
+export type ConfirmationReach =
+  | { checked: true; unavailable_user_ids: string[]; unavailable_count: number }
+  | { checked: false };
+
 export interface PingResult {
   id: string;
   message: string;
@@ -237,6 +247,7 @@ export interface PingResult {
   created_at: string;
   recipient_count?: number;
   muted_count?: number;
+  confirmation_reach?: ConfirmationReach;
   [key: string]: unknown;
 }
 

@@ -273,6 +273,19 @@ only **add** an acknowledgement requirement for that one press — passing `fals
 never removes one from an action already configured to require it. Neither
 modifier edits the action's saved configuration.
 
+A `requires_ack` result from `broadcast()` or `trigger()` carries
+`confirmation_reach`. In a private room it names who has no device that can show
+Confirm: they get a plain alert, so they may never confirm. `{ checked: false }`
+means nothing was checked (public rooms, rooms over 100 recipients, a failed
+lookup), not that everyone is reachable.
+
+```ts
+const sent = await pr.broadcast(code, { message: 'Confirm', requires_ack: true });
+if (sent.confirmation_reach?.checked) {
+  console.log(sent.confirmation_reach.unavailable_user_ids);
+}
+```
+
 `trigger_source` is `manual` (the default) or `location`; `webhook`/`system` are
 stamped server-side and rejected here. **Leave it unset to press a Quick Ping.**
 `location` is the device-geofence source, not a press modifier: it is for the
