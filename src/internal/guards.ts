@@ -34,7 +34,7 @@ export function assertMaxLength(value: unknown, max: number, field: string): voi
  * six-byte `\uXXXX` escape and `/` becomes `\/`. Non-Latin text is several
  * times larger there than its UTF-8 size.
  */
-function serverJsonByteLength(json: string): number {
+export function serverJsonByteLength(json: string): number {
   let bytes = 0;
   for (let index = 0; index < json.length; index += 1) {
     const code = json.charCodeAt(index);
