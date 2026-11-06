@@ -163,8 +163,9 @@ export interface IncomingWebhookPayload {
 export interface SendIncomingWebhookOptions {
   /**
    * Sent as the Idempotency-Key header; identical keys within ~1h replay the
-   * first result. 1–255 printable ASCII characters (spaces allowed), else
-   * `invalid_request` before sending.
+   * first result. Omitted or empty-string keys send no header. Other keys must
+   * be 1–255 printable ASCII characters (spaces allowed), else `invalid_request`
+   * before sending.
    */
   idempotencyKey?: string;
   timeoutMs?: number;
