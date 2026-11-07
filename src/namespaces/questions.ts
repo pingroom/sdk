@@ -76,7 +76,7 @@ export class QuestionsApi {
    * `answer.value` to branch. A poll returns once it closes; its `answer` is the
    * leading option, or `null` on a tie, and `results` holds the tally.
    *
-   * Polls start at least 1 s apart. A response that is not this Question in a
+   * Polls start at least 2.1 s apart. A response that is not this Question in a
    * known state rejects with `invalid_response`. Network failures, 429 and 5xx
    * are retried with backoff (honouring `retryAfter`), and reported to
    * `onRetry`, until `signal` aborts or the outage outlasts the Question's

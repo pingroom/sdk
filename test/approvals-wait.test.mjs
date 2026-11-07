@@ -14,7 +14,7 @@ function subprocess(script) {
   // A regressed loop starves timers, including node:test's own timeout. The
   // parent must enforce this bound outside the child event loop.
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
-    encoding: 'utf8', timeout: 3000, killSignal: 'SIGKILL',
+    encoding: 'utf8', timeout: 8000, killSignal: 'SIGKILL',
   });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
@@ -70,8 +70,8 @@ test('immediately pending approval polls respect the release gate deadline witho
     });
     try {
       await releaseWithApproval({
-        // Approval polls start at least 1 s apart, so 1.5 s fits two of them.
-        client, room: 'DEMO', artifactPath: ${JSON.stringify(artifactPath)}, destination: 'test-staging', timeoutMs: 1500,
+        // Approval polls start at least 2.1 s apart, so 2.5 s fits two of them.
+        client, room: 'DEMO', artifactPath: ${JSON.stringify(artifactPath)}, destination: 'test-staging', timeoutMs: 2500,
         execute: async () => { executions++; },
       });
       throw new Error('pending approval unexpectedly released');

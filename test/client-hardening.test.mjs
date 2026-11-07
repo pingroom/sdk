@@ -188,6 +188,52 @@ test('the HTTP client refuses an absolute URL so the token cannot go to another 
   assert.equal(calls[0].url.href, 'https://api.pingroom.io/api/agent/rooms');
 });
 
+test('a 2xx whose non-empty body is not JSON is invalid_response, never returned as data', async () => {
+  const pages = ['<html>Please sign in to the hotspot</html>', 'OK', '{"rooms": [', 'undefined'];
+  for (const body of pages) {
+    for (const status of [200, 201, 202]) {
+      const { fetchImpl } = recording(() => ({ status, body }));
+      const pr = new PingRoom({ token: 't', fetch: fetchImpl });
+      await assert.rejects(
+        pr.rooms.list(),
+        (error) => error instanceof PingRoomError && error.code === 'invalid_response' && error.status === 0,
+        `${status} ${body}`,
+      );
+    }
+  }
+  const { fetchImpl } = recording(() => ({ body: `<html>${'x'.repeat(5000)}</html>` }));
+  const error = await new PingRoom({ token: 't', fetch: fetchImpl }).rooms.list().catch((e) => e);
+  assert.ok(error.body.length <= 512);
+});
+
+test('an empty, 204, whitespace or JSON-null success is still a success', async () => {
+  const cases = [
+    [204, undefined, undefined],
+    [200, undefined, null],
+    [202, undefined, null],
+    [200, ' \n', null],
+    [200, 'null', null],
+    [200, '[]', []],
+    [200, '{"ok":true}', { ok: true }],
+  ];
+  for (const [status, body, expected] of cases) {
+    // A 204 cannot carry a body, and `new Response('', { status: 204 })` throws.
+    const fetchImpl = async () => new Response(status === 204 ? null : body ?? '', { status });
+    const client = new HttpClient({ baseUrl: 'https://api.pingroom.io', token: TOKEN, fetch: fetchImpl });
+    assert.deepEqual(await client.request('POST', '/x'), expected, `${status} ${JSON.stringify(body)}`);
+  }
+  // The undecoded-bytes path never parses a success.
+  const { fetchImpl } = recording(() => ({ body: 'not json at all' }));
+  const client = new HttpClient({ baseUrl: 'https://api.pingroom.io', token: TOKEN, fetch: fetchImpl });
+  assert.equal(await (await client.raw('GET', '/content')).text(), 'not json at all');
+});
+
+test('a non-JSON error body still maps to a PingRoomError with its status', async () => {
+  const { fetchImpl } = recording(() => ({ status: 502, body: '<html>Bad gateway</html>' }));
+  const pr = new PingRoom({ token: 't', fetch: fetchImpl });
+  await assert.rejects(pr.rooms.list(), (error) => error instanceof PingRoomError && error.status === 502 && error.code === null);
+});
+
 test('mcp.call rejects a 2xx that carries neither result nor error', async () => {
   for (const body of [undefined, '<html>ok</html>', {}, [], { jsonrpc: '2.0', id: 1 }]) {
     const { fetchImpl } = recording(() => ({ body }));
@@ -203,6 +249,18 @@ test('mcp.call rejects a 2xx that carries neither result nor error', async () =>
 });
 
 // --- SDK-09: the connection routes are wrapped ------------------------------
+
+test('mcp.initialize does not depend on the body of the initialized-notification reply', async () => {
+  const { fetchImpl } = recording((call) => {
+    const body = JSON.parse(call.init.body);
+    if (body.method === 'initialize') {
+      return { body: { jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'p', version: '1' } } } };
+    }
+    return { status: 202, body: 'Accepted' };
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchImpl });
+  assert.equal((await pr.mcp.initialize()).protocolVersion, '2025-06-18');
+});
 
 test('auth.connection and auth.disconnect call the agent connection routes', async () => {
   const connection = {
@@ -228,10 +286,10 @@ test('auth.connection and auth.disconnect call the agent connection routes', asy
 
 // --- SDK-04 / XR-03: listen retries only transient failures ----------------
 
-function listenScript(steps) {
+function listenScript(steps, now = () => performance.now()) {
   const requests = [];
   const fetchImpl = async (url) => {
-    requests.push({ at: performance.now(), url: new URL(url) });
+    requests.push({ at: now(), url: new URL(url) });
     const step = steps[Math.min(requests.length - 1, steps.length - 1)];
     if (step.throws) throw step.throws;
     return new Response(JSON.stringify(step.body ?? {}), { status: step.status ?? 200, headers: step.headers });
@@ -240,6 +298,31 @@ function listenScript(steps) {
 }
 
 const ping = (id) => ({ id, message: id, created_at: 'now', action_number: null, action_icon: null, trigger_source: null });
+
+/**
+ * Run `work` on a mocked setTimeout and Date, ticking `stepMs` of fake time
+ * until it settles, so a backoff of seconds costs nothing. setImmediate stays
+ * real and flushes the fetch promise chain between ticks. Request times from
+ * `listenScript(steps, () => Date.now())` are then fake milliseconds.
+ */
+async function onFakeClock(t, work, { stepMs = 50, maxMs = 300_000 } = {}) {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  let outcome = null;
+  work().then(() => { outcome = { ok: true }; }, (error) => { outcome = { error }; });
+  for (let elapsed = 0; elapsed <= maxMs; elapsed += stepMs) {
+    for (let i = 0; i < 4 && outcome === null; i += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (outcome !== null) {
+      if (outcome.error) throw outcome.error;
+      return;
+    }
+    t.mock.timers.tick(stepMs);
+  }
+  assert.fail(`did not settle within ${maxMs} ms of fake time`);
+}
+
+const gapsOf = (requests) => requests.slice(1).map((r, i) => r.at - requests[i].at);
 
 test('listen ends by throwing a 401 even with onError, instead of retrying a revoked credential', async () => {
   const { pr, requests } = listenScript([{ status: 401, body: { message: 'Unauthenticated.' } }]);
@@ -252,23 +335,24 @@ test('listen ends by throwing a 401 even with onError, instead of retrying a rev
   assert.equal(handled.length, 0);
 });
 
-test('listen passes only transient failures to onError, backs off, and keeps delivering', async () => {
+test('listen passes only transient failures to onError, backs off, and keeps delivering', async (t) => {
   const { pr, requests } = listenScript([
     { status: 503, body: {} },
     { throws: new TypeError('fetch failed') },
     { body: { notifications: [ping('a')], cursor: 'c1' } },
-  ]);
+  ], () => Date.now());
   const handled = [];
   const got = [];
-  for await (const n of pr.notifications.listen({ after: 'c0', backoffMs: 40, onError: (e) => handled.push(e) })) {
-    got.push(n.id);
-    break;
-  }
+  await onFakeClock(t, async () => {
+    for await (const n of pr.notifications.listen({ after: 'c0', backoffMs: 400, onError: (e) => handled.push(e) })) {
+      got.push(n.id);
+      break;
+    }
+  });
   assert.deepEqual(got, ['a']);
   assert.deepEqual(handled.map((e) => [e.status, e.code]), [[503, null], [0, 'network_error']]);
-  // Exponential: 40 ms after the first failure, 80 ms after the second.
-  assert.ok(requests[1].at - requests[0].at >= 35);
-  assert.ok(requests[2].at - requests[1].at >= 75);
+  // Exponential: 400 ms after the first failure, 800 ms after the second.
+  assert.deepEqual(gapsOf(requests), [400, 800]);
 });
 
 test('listen without onError retries a 429 after retryAfter instead of ending', async () => {
@@ -285,21 +369,52 @@ test('listen without onError retries a 429 after retryAfter instead of ending', 
   assert.ok(requests[1].at - requests[0].at >= 950, `retried after ${requests[1].at - requests[0].at} ms`);
 });
 
-test('listen retries a transient failure of its first head read', async () => {
+test('listen retries a transient failure of its first head read', async (t) => {
   const { pr, requests } = listenScript([
     { status: 502, body: {} },
     { body: { notifications: [], cursor: 'head' } },
     { body: { notifications: [ping('c')], cursor: 'c3' } },
-  ]);
+  ], () => Date.now());
   const got = [];
-  for await (const n of pr.notifications.listen({ backoffMs: 1 })) {
-    got.push(n.id);
-    break;
-  }
+  await onFakeClock(t, async () => {
+    for await (const n of pr.notifications.listen()) {
+      got.push(n.id);
+      break;
+    }
+  });
   assert.deepEqual(got, ['c']);
   assert.equal(requests[1].url.searchParams.get('timeout'), '0');
   assert.equal(requests[1].url.searchParams.has('after'), false);
   assert.equal(requests[2].url.searchParams.get('after'), 'head');
+});
+
+test('listen floors every backoffMs at 250 ms, then doubles to the 30 s cap, on a persistent failure', async (t) => {
+  // 0 never grew, and 1 reached only 32 ms: about 31 requests a second against
+  // a route limited to 30 a minute. Every base below the floor now behaves alike.
+  for (const backoffMs of [0, 1, 40, 250]) {
+    const { pr, requests } = listenScript([{ status: 503, body: {} }], () => Date.now());
+    const controller = new AbortController();
+    await onFakeClock(t, async () => {
+      setTimeout(() => controller.abort(), 100_000);
+      for await (const _ of pr.notifications.listen({ after: 'c0', signal: controller.signal, backoffMs })) { /* none */ }
+    }, { stepMs: 250 });
+    assert.deepEqual(
+      gapsOf(requests),
+      [250, 500, 1000, 2000, 4000, 8000, 16000, 30000, 30000],
+      `backoffMs ${backoffMs}`,
+    );
+    t.mock.timers.reset();
+  }
+});
+
+test('listen keeps a backoffMs above the floor and still caps at 30 s', async (t) => {
+  const { pr, requests } = listenScript([{ status: 503, body: {} }], () => Date.now());
+  const controller = new AbortController();
+  await onFakeClock(t, async () => {
+    setTimeout(() => controller.abort(), 100_000);
+    for await (const _ of pr.notifications.listen({ after: 'c0', signal: controller.signal })) { /* none */ }
+  }, { stepMs: 1000 });
+  assert.deepEqual(gapsOf(requests), [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
 });
 
 test('aborting listen during a backoff ends it quietly', async () => {

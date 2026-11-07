@@ -79,7 +79,7 @@ export class ApprovalsApi {
 
   /**
    * Block until the human decides (or the request expires or is cancelled),
-   * looping wait() under the hood, with polls started at least 1 s apart. A
+   * looping wait() under the hood, with polls started at least 2.1 s apart. A
    * response that is not this approval in a known status rejects with
    * `invalid_response`. Network failures, 429 and 5xx are retried with backoff
    * (honouring `retryAfter`), and reported to `onRetry`, until `signal` aborts

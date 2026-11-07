@@ -35,9 +35,10 @@ export const MIN_LISTEN_POLL_INTERVAL_MS = MIN_HANDOFF_POLL_INTERVAL_MS;
  * Minimum spacing between the starts of two approval or question wait polls.
  * The server normally holds each one, but a proxy or a zero hold that answers
  * `pending` at once would otherwise spin the loop and keep the human's shared
- * 30-per-minute wait bucket exhausted. Same floor as the CLI.
+ * 30-per-minute wait bucket exhausted. Same floor as the handoff wait and the
+ * CLI (2100 ms keeps one loop under 30 a minute).
  */
-export const MIN_WAIT_POLL_INTERVAL_MS = 1000;
+export const MIN_WAIT_POLL_INTERVAL_MS = MIN_HANDOFF_POLL_INTERVAL_MS;
 
 export function enc(segment: string): string {
   // encodeURIComponent leaves `.` and `..` alone, and URL parsing then

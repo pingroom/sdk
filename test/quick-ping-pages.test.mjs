@@ -12,7 +12,7 @@ function setup(status = 200, response = {}) {
 }
 
 test('quick ping page slots survive SDK send, edit, trigger, and webhook requests', async () => {
-  const { pr, calls, fetch } = setup();
+  const { pr, calls, fetch } = setup(200, { success: true });
   for (const slot of [4, 5, 8, 9, 12, 13, 16]) {
     await pr.broadcast('AB12', { message: 'Ready', action_number: slot });
     await pr.agents.ping('agt_test', { message: 'Ready', action_number: slot });

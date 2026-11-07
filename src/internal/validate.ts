@@ -29,3 +29,14 @@ export function invalidWaitResponse(subject: string, expectedId: string, value: 
     },
   });
 }
+
+/**
+ * A 2xx the PingRoom API never sends: a gateway's or captive portal's page, or
+ * a URL that is not PingRoom's. The body is kept short, for inspection only.
+ */
+export function invalidSuccessResponse(status: number, expected: string, body: unknown): PingRoomError {
+  return new PingRoomError(`PingRoom returned an invalid response (HTTP ${status}): expected ${expected}.`, {
+    code: 'invalid_response',
+    body: typeof body === 'string' ? body.slice(0, 512) : body,
+  });
+}

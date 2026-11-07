@@ -396,8 +396,10 @@ export interface ListenInput {
    */
   onError?: (err: unknown) => void;
   /**
-   * First backoff after a transient error, in ms (default 1000). It doubles on
-   * each consecutive failure up to 30 s; a server `retryAfter` replaces it.
+   * First backoff after a transient error, in ms (default 1000, minimum 250:
+   * a smaller value is raised to 250, so a persistent failure never retries in
+   * a tight loop against the shared wait limit). It doubles on each consecutive
+   * failure up to 30 s; a server `retryAfter` replaces it.
    */
   backoffMs?: number;
 }

@@ -313,6 +313,67 @@ test('sendIncomingWebhook throws PingRoomError with retryAfter on a failure body
   );
 });
 
+test('sendIncomingWebhook refuses a 2xx that is not a JSON object with success: true', async () => {
+  const url = 'https://api.pingroom.io/api/webhooks/AB12/secret-SYNTHETIC';
+  const bodies = [
+    ['an HTML page', '<html>Please sign in to the hotspot</html>', 200],
+    ['plain text', 'OK', 200],
+    ['an empty body', '', 200],
+    ['an empty 204', null, 204],
+    ['a JSON null', 'null', 200],
+    ['an array', '[]', 200],
+    ['an object without success', '{"notification_id":"n1"}', 200],
+    ['a non-boolean success', '{"success":"true"}', 200],
+  ];
+  for (const [label, body, status] of bodies) {
+    const err = await sendIncomingWebhook(url, { message: 'hi' }, { fetch: async () => new Response(body, { status }) }).then(
+      () => null,
+      (e) => e,
+    );
+    assert.ok(err instanceof PingRoomError, label);
+    assert.equal(err.code, 'invalid_response', label);
+    assert.equal(err.status, 0, label);
+    assert.ok(!err.message.includes('secret-SYNTHETIC'), label);
+  }
+});
+
+test('sendIncomingWebhook still returns every success shape the server sends', async () => {
+  const url = 'https://api.pingroom.io/api/webhooks/AB12/secret';
+  const bodies = [
+    // WebhookTriggerService::trigger, replayed from an idempotency receipt alike.
+    {
+      success: true,
+      message: 'Webhook triggered successfully',
+      notification_id: 'n1',
+      room: { id: 'r1', name: 'Builds' },
+      webhook: { id: 'w1', name: 'CI', emoji: null, icon: null },
+      action: null,
+      notification_title: null,
+      notification_message: 'hi',
+      action_state: null,
+      triggered_at: '2026-11-07T10:00:00+00:00',
+    },
+    // WebhookController::renderLiveStatus, including the no-op replay.
+    { success: true, notification_id: 'n2', correlation_id: 'deploy-1', action_state: null, live_status: { state: 'running' }, idempotent: true },
+  ];
+  for (const body of bodies) {
+    for (const status of [200, 201]) {
+      const result = await sendIncomingWebhook(url, { message: 'hi' }, {
+        fetch: async () => new Response(JSON.stringify(body), { status }),
+      });
+      assert.deepEqual(result, body);
+    }
+  }
+});
+
+test('sendIncomingWebhook maps a 2xx that says success: false to the server error', async () => {
+  const body = { success: false, error: 'webhook_disabled', message: 'Webhook is currently disabled' };
+  await assert.rejects(
+    sendIncomingWebhook('https://api.pingroom.io/x', { message: 'hi' }, { fetch: async () => new Response(JSON.stringify(body)) }),
+    (e) => e instanceof PingRoomError && e.code === 'webhook_disabled' && e.status === 200,
+  );
+});
+
 test('incoming webhook forwards everyone confirmation and returns partial progress', async () => {
   let sent;
   const state = { status: 'open', mode: 'all', confirmed_count: 1, required_count: 3 };

@@ -181,7 +181,7 @@ for (const loop of loops) {
   });
 }
 
-test('approval and question waits start polls at least 1 s apart when the server answers pending at once', async (t) => {
+test('approval and question waits start polls at least 2.1 s apart when the server answers pending at once', async (t) => {
   fakeTime(t);
   for (const loop of loops.slice(0, 2)) {
     const { pr, requests } = transport((n) => ({ body: n < 4 ? loop.pending(null) : loop.done }));
@@ -189,12 +189,12 @@ test('approval and question waits start polls at least 1 s apart when the server
     assert.ifError(outcome.error);
     assert.equal(requests.length, 4, loop.name);
     const gaps = requests.slice(1).map((r, i) => r.at - requests[i].at);
-    assert.ok(gaps.every((gap) => gap >= 1000), `${loop.name} poll gaps ${gaps.join(', ')} ms`);
-    assert.ok(gaps.every((gap) => gap < 1100), `${loop.name} waited longer than the floor: ${gaps.join(', ')} ms`);
+    assert.ok(gaps.every((gap) => gap >= 2100), `${loop.name} poll gaps ${gaps.join(', ')} ms`);
+    assert.ok(gaps.every((gap) => gap < 2200), `${loop.name} waited longer than the floor: ${gaps.join(', ')} ms`);
   }
 });
 
-test('the 1 s floor applies between pending polls only: a terminal answer returns at once', async (t) => {
+test('the 2.1 s floor applies between pending polls only: a terminal answer returns at once', async (t) => {
   fakeTime(t);
   for (const loop of loops.slice(0, 2)) {
     const { pr, requests } = transport(() => ({ body: loop.done }));

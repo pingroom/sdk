@@ -1,6 +1,7 @@
 import { PingRoomError, PingRoomNetworkError, PingRoomTimeoutError } from './errors.js';
 import { combineSignals } from './internal/async.js';
 import { assertSecureUrl, refuseRedirect } from './internal/url.js';
+import { invalidSuccessResponse } from './internal/validate.js';
 import type { FetchLike } from './types.js';
 import { VERSION } from './version.js';
 
@@ -165,10 +166,15 @@ export class HttpClient {
     }
     const text = await res.text();
     let json: unknown = null;
-    if (text) {
+    if (text.trim()) {
       try {
         json = JSON.parse(text);
       } catch {
+        // A non-JSON error stays text for the error mapping below; a non-JSON
+        // success is a proxy's page, not data.
+        if (res.ok) {
+          throw invalidSuccessResponse(res.status, 'a JSON body', text);
+        }
         json = text;
       }
     }

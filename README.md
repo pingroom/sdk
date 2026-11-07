@@ -457,11 +457,12 @@ for await (const ping of pr.notifications.listen({ signal: ac.signal })) {
 ```
 
 `listen()` retries transient failures (network errors, request timeouts, 429
-and 5xx) with a backoff that starts at `backoffMs` (default 1 s), doubles up to
-30 s, and waits out a server `retryAfter`. Pass `onError` to observe those
-retries. Any other failure, such as a 401 after the credential is revoked or a
-403, ends the iterator by throwing, with or without `onError`. A 2xx that is not
-a wait answer (a captive portal's page, say) ends it with `invalid_response`.
+and 5xx) with a backoff that starts at `backoffMs` (default 1 s, minimum 250
+ms: a smaller value is raised to 250 ms), doubles up to 30 s, and waits out a
+server `retryAfter`. Pass `onError` to observe those retries. Any other failure,
+such as a 401 after the credential is revoked or a 403, ends the iterator by
+throwing, with or without `onError`. A 2xx that is not a wait answer (a captive
+portal's page, say) ends it with `invalid_response`.
 
 Polls after an empty answer start at least 2.1 seconds apart, so `timeout: 0`,
 or a proxy that answers early, cannot use up the wait route's 30-per-minute
@@ -528,8 +529,9 @@ else, such as an HTML page from a proxy, `{}`, or another approval, rejects with
 `invalid_response` instead of being returned as an outcome. The wait routes
 share a 30-requests-per-minute limit per human, so these loops retry a 429
 after its `retryAfter`, and retry network errors and 5xx with a backoff capped
-at 30 s. Approval and question polls start at least 1 s apart, and handoff
-polls 2.1 s apart, even if something in between answers `pending` at once.
+at 30 s. Approval, question and handoff polls start at least 2.1 s apart (one
+loop stays under the limit), even if something in between answers `pending` at
+once.
 
 The retries are bounded without a signal. Once only failures have come back
 since the last valid response, a wait gives up 5 minutes after the last
@@ -968,7 +970,7 @@ try {
 }
 ```
 
-The SDK also raises a few client-side codes: `network_error` and `timeout` (status 0), `redirect_refused` when the API answers with a redirect (the SDK never follows one, so a token, upload or webhook body cannot be forwarded to another origin), `invalid_response` when a wait loop receives something that is not the requested approval, Question or handoff, `unavailable` when a wait loop stops retrying an unreachable API (see [approvals](#human-in-the-loop-approvals); the last failure is `error.cause`), and `invalid_request` for input refused before sending, including an `idempotencyKey` that is not 1–255 printable ASCII characters.
+The SDK also raises a few client-side codes: `network_error` and `timeout` (status 0), `redirect_refused` when the API answers with a redirect (the SDK never follows one, so a token, upload or webhook body cannot be forwarded to another origin), `invalid_response` when a wait loop receives something that is not the requested approval, Question or handoff, when any call gets a 2xx whose body is not JSON (a proxy's page, say), or when `sendIncomingWebhook()` gets a 2xx that is not a JSON object with `success: true` (a misrouted webhook URL), `unavailable` when a wait loop stops retrying an unreachable API (see [approvals](#human-in-the-loop-approvals); the last failure is `error.cause`), and `invalid_request` for input refused before sending, including an `idempotencyKey` that is not 1–255 printable ASCII characters.
 
 The coded vocabulary is exported both as types and as runtime arrays, one per
 surface, so you can branch exhaustively:

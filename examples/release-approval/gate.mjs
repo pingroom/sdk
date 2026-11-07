@@ -123,6 +123,13 @@ export async function releaseWithApproval({ client, room, artifactPath, destinat
     if (performance.now() >= deadline) timeout();
     if (controller.signal.aborted) throw controller.signal.reason;
   }
+  // The SDK refuses a 2xx that is not JSON, and a wait response that is not
+  // this approval in a known status; the gate reports both the same way as its
+  // own binding checks.
+  function malformed(error) {
+    if (error?.code === 'invalid_response') block('invalid_approval', 'PingRoom returned a malformed approval.');
+    throw error;
+  }
   function bounded(operation) {
     check();
     return new Promise((resolve, reject) => {
@@ -147,7 +154,7 @@ export async function releaseWithApproval({ client, room, artifactPath, destinat
       question, title: 'Release approval', options: [...OPTIONS], ttl,
       correlation_id: expected.correlationId,
       data: { artifact_name: artifactName, sha256, destination },
-    }));
+    })).catch(malformed);
     check();
     verifyBinding(created, expected);
     const expiresAt = timestamp(created.expires_at);
@@ -156,13 +163,8 @@ export async function releaseWithApproval({ client, room, artifactPath, destinat
       block('invalid_approval', 'Created approval must be pending with a valid future expiry.');
     }
     const approvalId = created.id;
-    // The SDK refuses a wait response that is not this approval in a known
-    // status; the gate reports that the same way as its own binding checks.
     const decided = await bounded(() => client.approvals.waitForDecision(approvalId, { signal: controller.signal }))
-      .catch((error) => {
-        if (error?.code === 'invalid_response') block('invalid_approval', 'PingRoom returned a malformed approval.');
-        throw error;
-      });
+      .catch(malformed);
     check();
     verifyBinding(decided, expected, approvalId);
     if (timestamp(decided.expires_at) !== expiresAt) block('invalid_approval', 'Approval expiry changed.');

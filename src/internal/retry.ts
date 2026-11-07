@@ -3,6 +3,12 @@ import { sleep, throwIfAborted } from './async.js';
 
 /** First retry delay after a transient failure, in ms. */
 export const TRANSIENT_BACKOFF_BASE_MS = 1000;
+/**
+ * The smallest backoff base, whatever a caller asks for. A persistent failure
+ * would otherwise retry in a tight loop (a base of 0 never grows at all)
+ * against wait routes shared at 30 requests a minute.
+ */
+export const MIN_TRANSIENT_BACKOFF_MS = 250;
 /** Ceiling on the exponential backoff (a server Retry-After may ask for longer). */
 export const TRANSIENT_BACKOFF_CAP_MS = 30_000;
 /** setTimeout fires immediately above this, so no delay may exceed it. */
@@ -36,19 +42,22 @@ export function isTransientError(error: unknown): error is PingRoomError {
 /**
  * Delay before retrying after the `failures`-th consecutive transient failure:
  * exponential from `baseMs`, capped at 30 s. A server `retryAfter` replaces the
- * exponential step, but is never waited for less than `baseMs`.
+ * exponential step, but is never waited for less than `baseMs`. A `baseMs`
+ * below {@link MIN_TRANSIENT_BACKOFF_MS} is raised to it.
  */
 export function transientDelayMs(
   error: PingRoomError,
   failures: number,
   baseMs: number = TRANSIENT_BACKOFF_BASE_MS,
 ): number {
-  const base = Number.isFinite(baseMs) && baseMs >= 0 ? baseMs : TRANSIENT_BACKOFF_BASE_MS;
+  const requested = Number.isFinite(baseMs) && baseMs >= 0 ? baseMs : TRANSIENT_BACKOFF_BASE_MS;
+  const base = Math.max(MIN_TRANSIENT_BACKOFF_MS, requested);
   const retryAfter = error.retryAfter;
   if (typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter >= 0) {
     return Math.min(MAX_TIMER_MS, Math.max(retryAfter * 1000, base));
   }
-  const step = Math.min(Math.max(0, failures - 1), 5);
+  // Enough doublings to pass the cap from any base; also keeps 2 ** step finite.
+  const step = Math.min(Math.max(0, failures - 1), 30);
   return Math.min(MAX_TIMER_MS, Math.max(base, TRANSIENT_BACKOFF_CAP_MS), base * 2 ** step);
 }
 

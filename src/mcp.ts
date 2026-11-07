@@ -48,10 +48,23 @@ export class McpClient {
   async call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
     const id = this.nextId++;
     const envelope = { jsonrpc: '2.0', id, method, ...(params ? { params } : {}) };
-    const res = await this.http.request<{ result?: T; error?: JsonRpcError }>('POST', this.path, {
-      body: envelope,
-      headers: this.headers(),
-    });
+    let res: { result?: T; error?: JsonRpcError };
+    try {
+      res = await this.http.request<{ result?: T; error?: JsonRpcError }>('POST', this.path, {
+        body: envelope,
+        headers: this.headers(),
+      });
+    } catch (error) {
+      // The HTTP layer refuses a non-JSON 2xx as `invalid_response`; MCP callers
+      // branch on its own code for a reply that is not a JSON-RPC response.
+      if (error instanceof PingRoomError && error.status === 0 && error.code === 'invalid_response') {
+        throw new PingRoomError('MCP endpoint returned a response with neither `result` nor `error`.', {
+          code: 'mcp_invalid_response',
+          body: error.body,
+        });
+      }
+      throw error;
+    }
     const isObject = res !== null && typeof res === 'object' && !Array.isArray(res);
     if (isObject && res.error) {
       throw new PingRoomError(`MCP error ${res.error.code}: ${res.error.message}`, {
@@ -126,10 +139,17 @@ export class McpClient {
 
   private async notify(method: string, params?: Record<string, unknown>): Promise<void> {
     const envelope = { jsonrpc: '2.0', method, ...(params ? { params } : {}) };
-    await this.http.request('POST', this.path, {
-      body: envelope,
-      headers: this.headers(),
-    });
+    try {
+      await this.http.request('POST', this.path, {
+        body: envelope,
+        headers: this.headers(),
+      });
+    } catch (error) {
+      // A notification has no reply: any 2xx acknowledges it, whatever its body.
+      if (!(error instanceof PingRoomError && error.status === 0 && error.code === 'invalid_response')) {
+        throw error;
+      }
+    }
   }
 
   private headers(): Record<string, string> {

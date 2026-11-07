@@ -79,6 +79,18 @@ test('every wait loop retries a 429 after its Retry-After, then returns the outc
   }));
 });
 
+test('a Retry-After longer than the poll floor is waited out in full, from the header or the body', async () => {
+  await Promise.all(loops.flatMap((loop) => [
+    { headers: { 'Retry-After': '3' }, body: { code: 'rate_limited', message: 'Too Many Attempts.' } },
+    { body: { code: 'rate_limited', message: 'Too Many Attempts.', retry_after: 3 } },
+  ].map(async ({ headers, body }) => {
+    const { pr, requests } = scripted([{ status: 429, body, headers }, { body: loop.done }]);
+    assert.deepEqual(await loop.run(pr), loop.done);
+    assert.equal(requests.length, 2, loop.name);
+    assert.ok(requests[1].at - requests[0].at >= 2950, `${loop.name} retried after ${requests[1].at - requests[0].at} ms`);
+  })));
+});
+
 test('every wait loop retries a 5xx and a dropped connection with backoff', async () => {
   await Promise.all(loops.flatMap((loop) => [
     { status: 503, body: '<html>Service Unavailable</html>' },
@@ -139,10 +151,27 @@ test('transient-failure classification matches the pairing and CLI retry set', (
 test('transient backoff doubles to a 30 s cap and yields to a server Retry-After', () => {
   const error = new PingRoomError('x', { status: 503 });
   assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 50].map((n) => transientDelayMs(error, n)), [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
-  assert.deepEqual([1, 2, 3].map((n) => transientDelayMs(error, n, 10)), [10, 20, 40]);
+  assert.deepEqual([1, 2, 3].map((n) => transientDelayMs(error, n, 400)), [400, 800, 1600]);
   const throttled = new PingRoomError('x', { status: 429, retryAfter: 42 });
   assert.equal(transientDelayMs(throttled, 1), 42_000);
   assert.equal(transientDelayMs(throttled, 9), 42_000);
   // Retry-After: 0 must not turn into a tight loop.
   assert.equal(transientDelayMs(new PingRoomError('x', { status: 429, retryAfter: 0 }), 1), 1000);
+});
+
+test('every backoff base is floored at 250 ms and doubles until the 30 s cap, for failures and Retry-After alike', () => {
+  const error = new PingRoomError('x', { status: 503 });
+  const doubling = [250, 500, 1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000];
+  for (const base of [0, 1, 10, 249, 250]) {
+    assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 100].map((n) => transientDelayMs(error, n, base)), doubling, `base ${base}`);
+    assert.equal(transientDelayMs(new PingRoomError('x', { status: 429, retryAfter: 0 }), 1, base), 250, `base ${base}`);
+  }
+  assert.equal(transientDelayMs(new PingRoomError('x', { status: 429, retryAfter: 3 }), 1, 0), 3000);
+  // A base above the floor is kept, doubles, and a base past the cap stays put.
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((n) => transientDelayMs(error, n, 300)), [300, 600, 1200, 2400, 4800, 9600, 19200]);
+  assert.deepEqual([1, 2, 3].map((n) => transientDelayMs(error, n, 60_000)), [60_000, 60_000, 60_000]);
+  // A nonsense base falls back to the default rather than to the floor.
+  for (const base of [-5, NaN, Infinity]) {
+    assert.equal(transientDelayMs(error, 1, base), 1000, String(base));
+  }
 });

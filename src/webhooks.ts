@@ -23,6 +23,7 @@ import {
   normalizeIdempotencyKey,
 } from './internal/guards.js';
 import { assertSecureUrl, redactUrlInMessage, refuseRedirect } from './internal/url.js';
+import { invalidSuccessResponse, isRecord } from './internal/validate.js';
 import type { LiveStatus } from './liveStatus.js';
 import type { AckMode, ActionState, FetchLike, JsonObject } from './types.js';
 import { VERSION } from './version.js';
@@ -264,11 +265,15 @@ export async function sendIncomingWebhook(
         json = text;
       }
     }
-    const result: IncomingWebhookResult = json && typeof json === 'object' ? (json as IncomingWebhookResult) : { success: res.ok };
-    if (!res.ok || result.success === false) {
+    if (!res.ok || (isRecord(json) && json['success'] === false)) {
       throw PingRoomError.fromResponse(res.status, json, res.headers);
     }
-    return result;
+    // Every success the endpoint sends is a JSON object with `success: true`.
+    // Anything else is a misrouted URL or a proxy's page, not a delivered Ping.
+    if (!isRecord(json) || json['success'] !== true) {
+      throw invalidSuccessResponse(res.status, 'a JSON object with `success: true`', json);
+    }
+    return json as IncomingWebhookResult;
   } catch (err) {
     if (signal.aborted) {
       throw signal.reason;
