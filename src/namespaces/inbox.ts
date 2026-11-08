@@ -194,7 +194,10 @@ export class InboxApi {
             throw error;
           }
           failures += 1;
-          await sleep(transientDelayMs(error, failures), signal);
+          await sleep(Math.max(
+            transientDelayMs(error, failures),
+            MIN_HANDOFF_POLL_INTERVAL_MS - (Date.now() - pollStartedAt),
+          ), signal);
           continue;
         }
         failures = 0;

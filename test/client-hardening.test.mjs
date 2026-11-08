@@ -351,22 +351,24 @@ test('listen passes only transient failures to onError, backs off, and keeps del
   });
   assert.deepEqual(got, ['a']);
   assert.deepEqual(handled.map((e) => [e.status, e.code]), [[503, null], [0, 'network_error']]);
-  // Exponential: 400 ms after the first failure, 800 ms after the second.
-  assert.deepEqual(gapsOf(requests), [400, 800]);
+  // The 400/800 ms backoff steps must also respect the poll interval.
+  assert.deepEqual(gapsOf(requests), [2100, 2100]);
 });
 
-test('listen without onError retries a 429 after retryAfter instead of ending', async () => {
+test('listen without onError waits out a retryAfter longer than the poll interval', async (t) => {
   const { pr, requests } = listenScript([
-    { status: 429, body: { code: 'rate_limited', message: 'Too Many Attempts.', retry_after: 1 } },
+    { status: 429, body: { code: 'rate_limited', message: 'Too Many Attempts.', retry_after: 3 } },
     { body: { notifications: [ping('b')], cursor: 'c2' } },
-  ]);
+  ], () => Date.now());
   const got = [];
-  for await (const n of pr.notifications.listen({ after: 'c0', backoffMs: 1 })) {
-    got.push(n.id);
-    break;
-  }
+  await onFakeClock(t, async () => {
+    for await (const n of pr.notifications.listen({ after: 'c0', backoffMs: 1 })) {
+      got.push(n.id);
+      break;
+    }
+  });
   assert.deepEqual(got, ['b']);
-  assert.ok(requests[1].at - requests[0].at >= 950, `retried after ${requests[1].at - requests[0].at} ms`);
+  assert.deepEqual(gapsOf(requests), [3000]);
 });
 
 test('listen retries a transient failure of its first head read', async (t) => {
@@ -388,7 +390,7 @@ test('listen retries a transient failure of its first head read', async (t) => {
   assert.equal(requests[2].url.searchParams.get('after'), 'head');
 });
 
-test('listen floors every backoffMs at 250 ms, then doubles to the 30 s cap, on a persistent failure', async (t) => {
+test('listen combines the poll interval with a growing backoff for small backoffMs values', async (t) => {
   // 0 never grew, and 1 reached only 32 ms: about 31 requests a second against
   // a route limited to 30 a minute. Every base below the floor now behaves alike.
   for (const backoffMs of [0, 1, 40, 250]) {
@@ -397,34 +399,50 @@ test('listen floors every backoffMs at 250 ms, then doubles to the 30 s cap, on 
     await onFakeClock(t, async () => {
       setTimeout(() => controller.abort(), 100_000);
       for await (const _ of pr.notifications.listen({ after: 'c0', signal: controller.signal, backoffMs })) { /* none */ }
-    }, { stepMs: 250 });
+    });
     assert.deepEqual(
       gapsOf(requests),
-      [250, 500, 1000, 2000, 4000, 8000, 16000, 30000, 30000],
+      [2100, 2100, 2100, 2100, 4000, 8000, 16000, 30000, 30000],
       `backoffMs ${backoffMs}`,
     );
     t.mock.timers.reset();
   }
 });
 
-test('listen keeps a backoffMs above the floor and still caps at 30 s', async (t) => {
+test('listen keeps a backoffMs above the poll interval and still caps at 30 s', async (t) => {
   const { pr, requests } = listenScript([{ status: 503, body: {} }], () => Date.now());
   const controller = new AbortController();
   await onFakeClock(t, async () => {
     setTimeout(() => controller.abort(), 100_000);
-    for await (const _ of pr.notifications.listen({ after: 'c0', signal: controller.signal })) { /* none */ }
+    for await (const _ of pr.notifications.listen({ after: 'c0', signal: controller.signal, backoffMs: 5000 })) { /* none */ }
   }, { stepMs: 1000 });
-  assert.deepEqual(gapsOf(requests), [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
+  assert.deepEqual(gapsOf(requests), [5000, 10000, 20000, 30000, 30000]);
 });
 
-test('aborting listen during a backoff ends it quietly', async () => {
-  const { pr, requests } = listenScript([{ status: 503, body: {} }]);
+test('aborting listen during the retry interval ends it quietly', async (t) => {
+  const { pr, requests } = listenScript([{ status: 503, body: {} }], () => Date.now());
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), 50);
-  const started = performance.now();
-  for await (const _ of pr.notifications.listen({ after: 'c0', signal: controller.signal, backoffMs: 5000 })) { /* none */ }
-  assert.ok(performance.now() - started < 1000);
+  await onFakeClock(t, async () => {
+    setTimeout(() => controller.abort(), 1500);
+    for await (const _ of pr.notifications.listen({ after: 'c0', signal: controller.signal, backoffMs: 0 })) { /* none */ }
+    assert.equal(Date.now(), 1500);
+  });
   assert.equal(requests.length, 1);
+});
+
+test('listen stays below 30 polls per minute across alternating failures and empty responses', async (t) => {
+  const steps = Array.from({ length: 60 }, (_, i) => i % 2 === 0
+    ? { status: 503, body: {} }
+    : { body: { notifications: [], cursor: 'c0' } });
+  const { pr, requests } = listenScript(steps, () => Date.now());
+  const controller = new AbortController();
+  await onFakeClock(t, async () => {
+    setTimeout(() => controller.abort(), 60_000);
+    for await (const _ of pr.notifications.listen({ after: 'c0', timeout: 0, signal: controller.signal })) { /* none */ }
+    assert.equal(Date.now(), 60_000);
+  });
+  assert.equal(requests.length, 29);
+  assert.ok(gapsOf(requests).every((gap) => gap === 2100));
 });
 
 // --- SD-06 / SD-08: listen polls are spaced, and a malformed 2xx is not a ping feed ---

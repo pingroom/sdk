@@ -128,8 +128,17 @@ export async function pollUntilSettled<T>(options: PollUntilSettledOptions<T>): 
         throw unavailable(error, failingSince, what);
       }
       onRetry?.(error, failures);
-      // Never sleep past the bound: the last attempt lands on it, not after it.
-      await sleep(Math.min(transientDelayMs(error, failures), remaining), signal);
+      // A fast failure still consumes a poll. Keep retries spaced even when a
+      // pending response between failures resets the exponential backoff.
+      const delay = Math.max(transientDelayMs(error, failures), minIntervalMs - (Date.now() - startedAt));
+      // Do not retry earlier than the interval or Retry-After just to fit the
+      // outage bound. Wait out the budget, then stop without another request.
+      if (delay > remaining) {
+        await sleep(remaining, signal);
+        throwIfAborted(signal);
+        throw unavailable(error, failingSince, what);
+      }
+      await sleep(delay, signal);
       continue;
     }
     failures = 0;

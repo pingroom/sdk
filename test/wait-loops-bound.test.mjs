@@ -100,8 +100,9 @@ for (const loop of loops) {
     const outage = outcome.at - START;
     assert.ok(outage >= 15 * MINUTE, `gave up after ${outage} ms`);
     assert.ok(outage <= 15 * MINUTE + 2000, `overshot the bound: ${outage} ms`);
-    // The last attempt lands on the bound rather than one backoff after it.
-    assert.ok(outcome.at - requests.at(-1).at <= 1000);
+    // If the next backoff will not fit, give up at the bound without sending
+    // an early retry or waiting one full backoff past it.
+    assert.ok(outcome.at - requests.at(-1).at <= 30_000);
   });
 
   test(`${loop.name} gives up at the last-seen expires_at plus 5 minutes, not before`, async (t) => {
@@ -179,6 +180,67 @@ for (const loop of loops) {
     );
     assert.equal(requests.length, 0);
   });
+
+  test(`${loop.name} stays below 30 polls per minute across alternating failures and pending responses`, async (t) => {
+    fakeTime(t);
+    const { pr, requests } = transport((n) => n % 2 === 1 ? unavailable503 : { body: loop.pending(null) });
+    const controller = new AbortController();
+    const reason = new Error('one minute elapsed');
+    setTimeout(() => controller.abort(reason), MINUTE);
+    const outcome = await settle(t, loop.run(pr, { timeout: 0, signal: controller.signal }), { stepMs: 50 });
+    assert.equal(outcome.error, reason);
+    assert.equal(outcome.at, START + MINUTE);
+    assert.equal(requests.length, 29, 'one loop must not exhaust the shared 30/minute wait bucket');
+    const gaps = requests.slice(1).map((r, i) => r.at - requests[i].at);
+    assert.ok(gaps.every((gap) => gap >= 2100 && gap < 2200), `poll gaps ${gaps.join(', ')} ms`);
+  });
+
+  test(`${loop.name} aborts during the retry poll interval without another request`, async (t) => {
+    fakeTime(t);
+    const { pr, requests } = transport(() => unavailable503);
+    const controller = new AbortController();
+    const reason = new Error('caller deadline');
+    setTimeout(() => controller.abort(reason), 1500);
+    const outcome = await settle(t, loop.run(pr, { signal: controller.signal }), { stepMs: 50 });
+    assert.equal(outcome.error, reason);
+    assert.equal(outcome.at, START + 1500);
+    assert.equal(requests.length, 1);
+  });
+
+  test(`${loop.name} stops at the outage deadline without an early retry`, async (t) => {
+    fakeTime(t);
+    const deadline = START + 2500;
+    const expiry = iso(deadline - WAIT_EXPIRY_GRACE_MS);
+    const { pr, requests } = transport((n) => n === 1 ? { body: loop.pending(expiry) } : unavailable503);
+    const outcome = await settle(t, loop.run(pr), { stepMs: 50 });
+    assert.equal(outcome.error?.code, 'unavailable');
+    assert.equal(outcome.at, deadline);
+    assert.deepEqual(requests.map((r) => r.at - START), [0, 2100]);
+  });
+
+  test(`${loop.name} retries at the outage deadline when the full interval fits`, async (t) => {
+    fakeTime(t);
+    const deadline = START + 4200;
+    const expiry = iso(deadline - WAIT_EXPIRY_GRACE_MS);
+    const { pr, requests } = transport((n) => n === 1 ? { body: loop.pending(expiry) } : unavailable503);
+    const outcome = await settle(t, loop.run(pr), { stepMs: 50 });
+    assert.equal(outcome.error?.code, 'unavailable');
+    assert.equal(outcome.at, deadline);
+    assert.deepEqual(requests.map((r) => r.at - START), [0, 2100, 4200]);
+  });
+
+  test(`${loop.name} preserves caller cancellation while waiting out the outage budget`, async (t) => {
+    fakeTime(t);
+    const expiry = iso(START + 2500 - WAIT_EXPIRY_GRACE_MS);
+    const { pr, requests } = transport((n) => n === 1 ? { body: loop.pending(expiry) } : unavailable503);
+    const controller = new AbortController();
+    const reason = new Error('caller stopped before outage deadline');
+    setTimeout(() => controller.abort(reason), 2300);
+    const outcome = await settle(t, loop.run(pr, { signal: controller.signal }), { stepMs: 50 });
+    assert.equal(outcome.error, reason);
+    assert.equal(outcome.at, START + 2300);
+    assert.deepEqual(requests.map((r) => r.at - START), [0, 2100]);
+  });
 }
 
 test('approval and question waits start polls at least 2.1 s apart when the server answers pending at once', async (t) => {
@@ -194,7 +256,7 @@ test('approval and question waits start polls at least 2.1 s apart when the serv
   }
 });
 
-test('the 2.1 s floor applies between pending polls only: a terminal answer returns at once', async (t) => {
+test('a terminal answer returns at once without applying the poll interval', async (t) => {
   fakeTime(t);
   for (const loop of loops.slice(0, 2)) {
     const { pr, requests } = transport(() => ({ body: loop.done }));

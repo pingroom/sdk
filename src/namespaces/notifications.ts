@@ -128,7 +128,10 @@ export class NotificationsApi {
         }
         failures += 1;
         input.onError?.(err);
-        await sleep(transientDelayMs(err, failures, backoffMs), input.signal);
+        await sleep(Math.max(
+          transientDelayMs(err, failures, backoffMs),
+          MIN_LISTEN_POLL_INTERVAL_MS - (Date.now() - pollStartedAt),
+        ), input.signal);
         continue;
       }
       failures = 0;

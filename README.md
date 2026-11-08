@@ -457,17 +457,19 @@ for await (const ping of pr.notifications.listen({ signal: ac.signal })) {
 ```
 
 `listen()` retries transient failures (network errors, request timeouts, 429
-and 5xx) with a backoff that starts at `backoffMs` (default 1 s, minimum 250
+and 5xx) with a backoff based on `backoffMs` (default 1 s, minimum 250
 ms: a smaller value is raised to 250 ms), doubles up to 30 s, and waits out a
 server `retryAfter`. Pass `onError` to observe those retries. Any other failure,
 such as a 401 after the credential is revoked or a 403, ends the iterator by
 throwing, with or without `onError`. A 2xx that is not a wait answer (a captive
 portal's page, say) ends it with `invalid_response`.
 
-Polls after an empty answer start at least 2.1 seconds apart, so `timeout: 0`,
-or a proxy that answers early, cannot use up the wait route's 30-per-minute
-limit, which is shared with the human's other listeners (the CLI, other agents).
-The default 20-second hold is unaffected.
+Retries and polls following an empty forward poll start at least 2.1 seconds
+after the previous poll started, even when `backoffMs` is smaller. This paces
+one loop's empty-response and retry traffic. The initial head read and nonempty
+batch draining remain immediate, and all listeners (the CLI, other agents)
+share the human's 30-requests-per-minute wait bucket. The default 20-second
+hold is unaffected.
 
 Or a single long-poll. Without `after`, `wait()` answers at once with no pings
 and the current head cursor, so pass the cursor from a previous call:

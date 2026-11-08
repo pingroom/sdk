@@ -57,6 +57,83 @@ function answeredActivation(overrides = {}) {
   };
 }
 
+async function onFakeClock(t, work) {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  let outcome = null;
+  work().then(() => { outcome = { ok: true }; }, (error) => { outcome = { error }; });
+  for (let elapsed = 0; elapsed <= 65_000; elapsed += 50) {
+    for (let i = 0; i < 4 && outcome === null; i += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (outcome !== null) {
+      if (outcome.error) throw outcome.error;
+      return;
+    }
+    t.mock.timers.tick(50);
+  }
+  assert.fail('activation did not settle within 65000 ms of fake time');
+}
+
+test('inbox.activate spaces alternating failures and pending responses until its overall deadline', async (t) => {
+  const starts = [];
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/inbox/ensure': () => ({ body: inboxEnsureBody() }),
+    'GET /api/agent/handoffs/q-onboard/wait': () => {
+      starts.push(Date.now());
+      return starts.length % 2 === 1
+        ? { status: 503, body: {} }
+        : { body: { id: 'q-onboard', kind: 'question', state: 'pending' } };
+    },
+  });
+  const pr = new PingRoom({ token: 'active-token', fetch: fetchMock });
+  await onFakeClock(t, async () => {
+    await assert.rejects(
+      pr.inbox.activate({ timeout: 0, overallTimeoutMs: 60_000 }),
+      (error) => error instanceof PingRoomActivationIncompleteError && error.reason === 'deadline_exceeded',
+    );
+    assert.equal(Date.now(), 60_000);
+  });
+  assert.equal(starts.length, 29);
+  assert.ok(starts.slice(1).every((at, i) => at - starts[i] === 2100));
+  assert.equal(calls.filter((call) => call.init.method === 'POST').length, 1);
+  assert.equal(pr.getToken(), 'active-token');
+});
+
+test('inbox.activate preserves cancellation during its retry interval', async (t) => {
+  const { calls, fetchMock } = recorder({
+    'POST /api/agent/inbox/ensure': () => ({ body: inboxEnsureBody() }),
+    'GET /api/agent/handoffs/q-onboard/wait': () => ({ status: 503, body: {} }),
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  const controller = new AbortController();
+  const reason = new Error('caller cancelled activation');
+  await onFakeClock(t, async () => {
+    setTimeout(() => controller.abort(reason), 1500);
+    await assert.rejects(pr.inbox.activate({ signal: controller.signal, overallTimeoutMs: 5000 }), (error) => error === reason);
+    assert.equal(Date.now(), 1500);
+  });
+  assert.deepEqual(calls.map((call) => call.init.method), ['POST', 'GET']);
+});
+
+test('inbox.activate waits out a Retry-After longer than its poll interval', async (t) => {
+  const starts = [];
+  const { fetchMock } = recorder({
+    'POST /api/agent/inbox/ensure': () => ({ body: inboxEnsureBody() }),
+    'GET /api/agent/handoffs/q-onboard/wait': () => {
+      starts.push(Date.now());
+      return starts.length === 1
+        ? { status: 429, body: { retry_after: 3 } }
+        : { body: answeredActivation() };
+    },
+  });
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  await onFakeClock(t, async () => {
+    const result = await pr.inbox.activate({ overallTimeoutMs: 5000 });
+    assert.equal(result.activation_completed, true);
+  });
+  assert.deepEqual(starts, [0, 3000]);
+});
+
 test('inbox.activate throttles pending observations before confirmed success', async () => {
   let waits = 0;
   const waitStartedAt = [];
