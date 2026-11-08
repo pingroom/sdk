@@ -807,7 +807,7 @@ There is a third producer — a person driving a stream from the app composer ov
 | Builder | Renders |
 |---|---|
 | `liveStatus.status` | Title, message, optional progress |
-| `liveStatus.steps` | Segmented tracker; `steps` (2–8 labels) required on the first ping and immutable after: later pings resend the identical list or omit it, and a different list throws `PingRoomError` `steps_immutable` (422) |
+| `liveStatus.steps` | Segmented tracker; `steps` (2–8 labels) required on the first ping and immutable after: later pings resend the identical list or omit it, and a different list on a `running` ping throws `PingRoomError` `steps_immutable` (422); a `done`/`failed` ping ignores it and still ends the stream |
 | `liveStatus.progress` | Determinate bar with optional `eta_at` |
 | `liveStatus.metrics` | Up to 3 `{label, value}` counters |
 | `liveStatus.countdown` | Large live timer to `deadline_at`. A later ping may move the deadline (send the absolute epoch); `duration_seconds` is read on the first ping only and moves by the same amount as the deadline |

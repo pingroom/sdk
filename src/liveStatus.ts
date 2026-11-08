@@ -49,9 +49,9 @@ export interface LiveStatusSide {
  * by the template you selected.
  *
  * `template` and `steps` are fixed at stream creation — a later ping cannot
- * re-template a running card, and a `steps` list that differs from the stored
- * one is rejected with 422 `steps_immutable` (an identical list, or none, is
- * fine). Content set at creation is sticky, so a sparse
+ * re-template a running card, and a `running` ping whose `steps` list differs
+ * from the stored one is rejected with 422 `steps_immutable` (an identical list,
+ * or none, is fine; a `done`/`failed` ping ignores it and still ends). Content set at creation is sticky, so a sparse
  * update carrying just `progress` keeps rendering the full template. The
  * terminal leg is sticky too: `{ state: 'done' }` alone keeps the scoreboard,
  * metrics grid, deadline and accent on the final frame.
@@ -65,8 +65,9 @@ export interface LiveStatus {
   progress?: number;
   /**
    * 2–8 labels. Required on the first ping of a `steps` stream; immutable after.
-   * Later pings may resend the identical list or omit it; a different list is
-   * rejected with 422 `steps_immutable`. Use `current_step` to advance.
+   * Later pings may resend the identical list or omit it; a different list on a
+   * `running` ping is rejected with 422 `steps_immutable`, and a `done`/`failed`
+   * ping ignores it. Use `current_step` to advance.
    */
   steps?: string[];
   /** Index into `steps`; the only mutable steps field. */
