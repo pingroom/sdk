@@ -807,10 +807,10 @@ There is a third producer — a person driving a stream from the app composer ov
 | Builder | Renders |
 |---|---|
 | `liveStatus.status` | Title, message, optional progress |
-| `liveStatus.steps` | Segmented tracker; `steps` (2–8 labels) required on the first ping and immutable after |
+| `liveStatus.steps` | Segmented tracker; `steps` (2–8 labels) required on the first ping and immutable after: later pings resend the identical list or omit it, and a different list throws `PingRoomError` `steps_immutable` (422) |
 | `liveStatus.progress` | Determinate bar with optional `eta_at` |
 | `liveStatus.metrics` | Up to 3 `{label, value}` counters |
-| `liveStatus.countdown` | Large live timer to `deadline_at` |
+| `liveStatus.countdown` | Large live timer to `deadline_at`. A later ping may move the deadline (send the absolute epoch); `duration_seconds` is read on the first ping only and moves by the same amount as the deadline |
 | `liveStatus.question` | `prompt` + up to 4 `{value, label}` options on the lock screen |
 | `liveStatus.matchup` | `left` / `center` / `right` — a score or A-vs-B |
 

@@ -49,7 +49,9 @@ export interface LiveStatusSide {
  * by the template you selected.
  *
  * `template` and `steps` are fixed at stream creation — a later ping cannot
- * re-template a running card. Content set at creation is sticky, so a sparse
+ * re-template a running card, and a `steps` list that differs from the stored
+ * one is rejected with 422 `steps_immutable` (an identical list, or none, is
+ * fine). Content set at creation is sticky, so a sparse
  * update carrying just `progress` keeps rendering the full template. The
  * terminal leg is sticky too: `{ state: 'done' }` alone keeps the scoreboard,
  * metrics grid, deadline and accent on the final frame.
@@ -61,18 +63,27 @@ export interface LiveStatus {
   message?: string;
   /** 0..1 — the progress bar / Dynamic Island gauge. */
   progress?: number;
-  /** 2–8 labels. Required on the first ping of a `steps` stream; immutable after. */
+  /**
+   * 2–8 labels. Required on the first ping of a `steps` stream; immutable after.
+   * Later pings may resend the identical list or omit it; a different list is
+   * rejected with 422 `steps_immutable`. Use `current_step` to advance.
+   */
   steps?: string[];
   /** Index into `steps`; the only mutable steps field. */
   current_step?: number;
   /** Up to 3 counters, for the `metrics` template. */
   metrics?: LiveStatusMetric[];
-  /** Epoch seconds the `countdown` template counts down to. */
+  /**
+   * Epoch seconds the `countdown` template counts down to. A later ping may move
+   * it: send the new absolute value, and the stored `duration_seconds` moves by
+   * the same amount (a retried ping moves nothing twice).
+   */
   deadline_at?: number;
   /**
-   * `countdown` only: the timer's original length in seconds. Read from the
-   * first ping only (the server derives `deadline_at - now` when omitted) and
-   * preserved through updates and completion.
+   * `countdown` only: the timer's length in seconds. Read from the first ping
+   * only (the server derives `deadline_at - now` when omitted); a later ping's
+   * own value is ignored. It follows `deadline_at`: moving the deadline on a
+   * later ping moves the stored duration by the same amount.
    */
   duration_seconds?: number;
   /** Epoch seconds; renders a live ETA on `status`/`progress`. */
@@ -134,7 +145,7 @@ export interface LiveStatusSnapshot {
   accent_override: string | null;
   eta_at: number | null;
   deadline_at: number | null;
-  /** Original countdown length in seconds; `null` on every other template. */
+  /** Countdown length in seconds, following any `deadline_at` move; `null` on every other template. */
   duration_seconds: number | null;
   metrics: LiveStatusMetric[] | null;
   prompt: string | null;
