@@ -3,7 +3,13 @@
 import { PingRoomError } from '../errors.js';
 import type { HttpClient } from '../http.js';
 import { assertStructuredData, requireNonEmpty } from '../internal/guards.js';
-import type { LiveStatusPing, LiveStatusResult, LiveStatusSnapshot } from '../liveStatus.js';
+import type {
+  LiveClaimAction,
+  LiveClaimResult,
+  LiveStatusPing,
+  LiveStatusResult,
+  LiveStatusSnapshot,
+} from '../liveStatus.js';
 import { enc } from '../internal/request.js';
 
 /**
@@ -50,5 +56,31 @@ export class LiveApi {
       if (error instanceof PingRoomError && error.status === 404 && error.code === 'stream_not_found') return null;
       throw error;
     }
+  }
+
+  /**
+   * Act on a "Who's on it?" request as the human this credential acts for:
+   * `claim` takes an open request (anyone but its asker), `release` lets go of
+   * one you hold, `done` finishes it (its claimer, or its asker at any time) and
+   * `cancel` withdraws it (its asker, or a room owner or admin).
+   *
+   * `notificationId` is the request's `notification_id`, from the `push()`
+   * result or `notifications.list()`. It needs only room membership, not room
+   * ownership, and the `pingroom:live:write` scope.
+   *
+   * Repeating your own last action resolves with `idempotent: true`. A refusal
+   * throws `PingRoomError`: `claim_conflict` (409), `claim_own_request` (422),
+   * `claim_private_rooms_only` (422), `claim_not_found` (404) or `forbidden`
+   * (403). On 409 and 422 `error.body` is a `LiveClaimRefusal` carrying the
+   * request as it stands, so you can say who got it first.
+   */
+  claim(inviteCode: string, notificationId: string, action: LiveClaimAction): Promise<LiveClaimResult> {
+    requireNonEmpty(inviteCode, 'inviteCode');
+    requireNonEmpty(notificationId, 'notificationId');
+    return this.http.request(
+      'POST',
+      `/api/agent/rooms/${enc(inviteCode)}/live/${enc(notificationId)}/claim`,
+      { body: { action } },
+    );
   }
 }

@@ -26,7 +26,8 @@ export type LiveActivityTemplate =
   | 'metrics'
   | 'countdown'
   | 'question'
-  | 'matchup';
+  | 'matchup'
+  | 'claim';
 
 export type LiveActivityStatus =
   | 'open'

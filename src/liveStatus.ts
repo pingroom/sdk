@@ -16,6 +16,11 @@
  * builders describe it too — but it is not an agent route and has no client
  * here.
  *
+ * A **claim request** ("Who's on it?", template `claim`) is a stream one member
+ * takes on. It starts like any stream, but it then moves only through
+ * `pr.live.claim()` (claim, release, done, cancel), not through further
+ * `live_status` legs. See https://pingroom.io/liveactivities.md.
+ *
  * Not to be confused with `liveActivity.*` in ./liveActivity.ts, which builds
  * the frozen *native* `{ attributes, content_state }` push shape for tests and
  * tooling. These builders produce the `live_status` object you actually send.
@@ -101,6 +106,65 @@ export interface LiveStatus {
   agent_id?: string;
 }
 
+/** Where a "Who's on it?" request stands. `open` and `claimed` are live; the rest are final. */
+export type LiveClaimStatus = 'open' | 'claimed' | 'done' | 'cancelled' | 'expired' | 'unfinished';
+
+/** What a member can do to a claim request. */
+export type LiveClaimAction = 'claim' | 'release' | 'done' | 'cancel';
+
+/** The stream `state` a claim status maps to: open and claimed are `running`, done is `done`, the rest are `failed`. */
+export type LiveClaimStreamState = 'running' | 'done' | 'failed';
+
+/** The person who holds a claim request, or who finished it. */
+export interface LiveClaimParty {
+  /** The user id (a UUID). */
+  id: string;
+  name: string;
+  color?: string;
+  emoji?: string;
+  image_url?: string;
+}
+
+/** The server-owned `claim` block of a claim request. */
+export interface LiveClaim {
+  status: LiveClaimStatus;
+  /** Who holds the request (or finished it); `null` while nobody does. */
+  by: LiveClaimParty | null;
+  /** Epoch seconds the holder took it; `null` while nobody holds it. */
+  at: number | null;
+  /** A claimed request is past its deadline. It stays live. */
+  late: boolean;
+  late_nudged_at?: number;
+  realerted_at?: number;
+  ended_by?: string;
+  released_by?: string;
+}
+
+/**
+ * The 200 body of `pr.live.claim()`. `idempotent` is true when the same person
+ * repeated the action that already produced the current status, so nothing
+ * changed and nothing was sent.
+ */
+export interface LiveClaimResult {
+  notification_id: string;
+  correlation_id: string;
+  claim: LiveClaim;
+  state: LiveClaimStreamState;
+  idempotent: boolean;
+}
+
+/**
+ * The body of a refused transition, on `PingRoomError.body`. `claim` and
+ * `state` are the request as it now stands (on 409 and 422), so a client can
+ * show who got it first. A 403 or 404 carries only `code` and `message`.
+ */
+export interface LiveClaimRefusal {
+  code: string;
+  message: string;
+  claim?: LiveClaim;
+  state?: LiveClaimStreamState;
+}
+
 /** The full body of a live-status ping. */
 export interface LiveStatusPing {
   correlation_id: string;
@@ -158,6 +222,10 @@ export interface LiveStatusSnapshot {
   current_step: number | null;
   action_state?: unknown;
   updated_at: string | null;
+  /** `claim` template only: the request text. Absent on every other template. */
+  title?: string;
+  /** `claim` template only: where the request stands. Absent on every other template. */
+  claim?: LiveClaim;
 }
 
 type Rest = Omit<LiveStatusPing, 'correlation_id' | 'live_status'>;
@@ -206,6 +274,23 @@ export const liveStatus = {
   /** Two sides plus a center score/clock. */
   matchup(correlationId: string, live: Omit<LiveStatus, 'template'>, rest?: Rest): LiveStatusPing {
     return ping(correlationId, { template: 'matchup', ...live }, rest);
+  },
+
+  /**
+   * "Who's on it?": a request one room member takes on. Private standard rooms
+   * only (`422 claim_private_rooms_only` elsewhere).
+   *
+   * Pass the request text as `rest.title` (1 to 120 characters; `live.message`
+   * is used when there is no title). Send `state: 'running'` on the first ping.
+   * `live.deadline_at` is optional, in the future and at most 8 hours away.
+   * Anything else in `live` is ignored, including a `claim` block.
+   *
+   * After creation the request moves with `pr.live.claim()`. A producer
+   * without a member identity (an incoming webhook) ends its own request with
+   * `liveStatus.done()` (done) or `liveStatus.failed()` (cancelled).
+   */
+  claim(correlationId: string, live: Omit<LiveStatus, 'template'>, rest?: Rest): LiveStatusPing {
+    return ping(correlationId, { template: 'claim', ...live }, rest);
   },
 
   /**

@@ -769,7 +769,7 @@ await sendIncomingWebhook(webhookUrl, {
 
 A **live-status stream** is one thing being tracked, keyed by your `correlation_id`. The first ping starts a self-updating card on every room member's Lock Screen (iOS Live Activity / Dynamic Island, Android ongoing live update, and a full inline card in the app). Later `running` pings move it **silently** — no new notification. The first `done`/`failed` sends one completion alert and ends it.
 
-Protocol: <https://pingroom.io/liveactivities.md> (v1.2).
+Protocol: <https://pingroom.io/liveactivities.md> (v1.4).
 
 ### Two ways to send one
 
@@ -813,6 +813,7 @@ There is a third producer — a person driving a stream from the app composer ov
 | `liveStatus.countdown` | Large live timer to `deadline_at`. A later ping may move the deadline (send the absolute epoch); `duration_seconds` is read on the first ping only and moves by the same amount as the deadline |
 | `liveStatus.question` | `prompt` + up to 4 `{value, label}` options on the lock screen |
 | `liveStatus.matchup` | `left` / `center` / `right` — a score or A-vs-B |
+| `liveStatus.claim` | "Who's on it?": a request one room member takes on. See [Who's on it?](#whos-on-it) |
 
 ```ts
 await pr.live.push('AB12CD', liveStatus.steps('release-7', {
@@ -829,6 +830,52 @@ await pr.live.push('AB12CD', liveStatus.matchup('game-3', {
   center: "68'",
 }));
 ```
+
+### Who's on it?
+
+A **claim request** asks the room "who's on it?" and lets one member take it. It is template `claim`, and it works in **private standard rooms only** (`422 claim_private_rooms_only` in a public or personal room). Pass the request text as `title` (1 to 120 characters, or `live_status.message` without a title). An optional `deadline_at` must be in the future and at most 8 hours away. The first ping must be `running`. The server writes the claim itself and ignores any `claim` block you send.
+
+```ts
+const { notification_id } = await pr.live.push('AB12CD', liveStatus.claim(
+  'milk-1',
+  { state: 'running', deadline_at: Math.floor(Date.now() / 1000) + 3600 },
+  { title: 'Buy milk' },
+));
+
+// Act as the human this credential belongs to. Needs only room membership.
+const taken = await pr.live.claim('AB12CD', notification_id, 'claim');
+console.log(taken.claim.status, taken.claim.by?.name, taken.idempotent);
+```
+
+`pr.live.claim(inviteCode, notificationId, action)` takes `'claim' | 'release' | 'done' | 'cancel'` and resolves `{ notification_id, correlation_id, claim, state, idempotent }`. It needs the `pingroom:live:write` scope.
+
+| Action | Who | From | To |
+|---|---|---|---|
+| `claim` | any member but the asker | open | claimed |
+| `release` | the claimer | claimed | open |
+| `done` | the claimer, or the asker at any time | open (asker only) or claimed | done |
+| `cancel` | the asker, or a room owner or admin | open or claimed | cancelled |
+
+The asker is the stream's sender. For an agent credential that is the human it acts for. Two claims at the same moment have one winner. The other throws `PingRoomError` `claim_conflict` (409), whose `body.claim` names who holds it. Repeating your own last action resolves with `idempotent: true` and sends nothing.
+
+```ts
+import { PingRoomError } from '@pingroom/sdk';
+
+try {
+  await pr.live.claim('AB12CD', notification_id, 'claim');
+} catch (error) {
+  if (error instanceof PingRoomError && error.code === 'claim_conflict') {
+    const { claim } = error.body as { claim: { by?: { name: string } } };
+    console.log(`${claim.by?.name} got it first`);
+  } else throw error;
+}
+```
+
+Refusals: `claim_conflict` (409), `claim_own_request` (422), `claim_private_rooms_only` (422), `claim_not_found` (404) and `forbidden` (403). Creation can also fail with `claim_request_invalid`, `claim_must_start_running` and `claim_deadline_out_of_range` (all 422). `LIVE_CLAIM_ERROR_CODES` lists the claim codes.
+
+A webhook has no member identity, so it cannot claim or release. It ends its own request with `liveStatus.done()` (done) or `liveStatus.failed()` (cancelled). An ordinary `running` leg on an existing request changes nothing.
+
+A request ends by itself. An open one expires at its deadline, or after 4 hours without one. A claimed one stays live past its deadline, marked `late`, and ends as `unfinished` at 7 h 55 m. `pr.live.get()` returns `title` and `claim` for a claim request. Claim support is newer than SDK 0.8.0.
 
 ### Ending and reading back
 
@@ -847,7 +894,7 @@ const snap = await pr.live.get('AB12CD', 'deploy-42');
 if (snap) console.log(snap.template, snap.current_step, snap.updated_at);
 ```
 
-`get()` returns **every** stored field (`state`, `progress`, `message`, `category`, `template`, `agent_id`, `accent_override`, `eta_at`, `deadline_at`, `duration_seconds`, `metrics`, `prompt`, `options`, `left`, `right`, `center`, `steps`, `current_step`) plus `action_state` and `updated_at`. Fields you never set come back as `null`, not omitted.
+`get()` returns **every** stored field (`state`, `progress`, `message`, `category`, `template`, `agent_id`, `accent_override`, `eta_at`, `deadline_at`, `duration_seconds`, `metrics`, `prompt`, `options`, `left`, `right`, `center`, `steps`, `current_step`) plus `action_state` and `updated_at`. Fields you never set come back as `null`, not omitted. A claim request adds `title` and `claim`.
 
 ### Ownership and limits
 

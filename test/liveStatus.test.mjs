@@ -47,8 +47,26 @@ test('liveStatus covers every template the server validates', () => {
   // Kept in lockstep with App\Support\LiveStatusRules::rules()'s
   // live_status.template enum — a builder missing here is a template no SDK
   // caller can discover.
-  for (const template of ['status', 'steps', 'progress', 'metrics', 'countdown', 'question', 'matchup']) {
+  for (const template of ['status', 'steps', 'progress', 'metrics', 'countdown', 'question', 'matchup', 'claim']) {
     assert.equal(typeof liveStatus[template], 'function', `missing builder: ${template}`);
     assert.equal(liveStatus[template]('c', { state: 'running' }).live_status.template, template);
   }
+});
+
+test('liveStatus.claim stamps the claim template and carries the request in title', () => {
+  const body = liveStatus.claim(
+    'milk-1',
+    { state: 'running', deadline_at: 1794148500 },
+    { title: 'Buy milk' },
+  );
+  assert.deepEqual(body, {
+    correlation_id: 'milk-1',
+    title: 'Buy milk',
+    live_status: { template: 'claim', state: 'running', deadline_at: 1794148500 },
+  });
+});
+
+test('a webhook ends its own claim request with the ordinary terminal builders', () => {
+  assert.deepEqual(liveStatus.done('milk-1').live_status, { state: 'done' });
+  assert.deepEqual(liveStatus.failed('milk-1').live_status, { state: 'failed' });
 });

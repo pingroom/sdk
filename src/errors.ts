@@ -108,6 +108,30 @@ export const QUICK_ACTION_ERROR_CODES = [
 ] as const;
 
 /**
+ * The coded refusals of the "Who's on it?" surface (`live.claim()`, and a
+ * `live.push()` that starts a `claim` stream).
+ *
+ * Server: `ClaimService`, `ClaimService::startingBlock()`.
+ */
+export const LIVE_CLAIM_ERROR_CODES = [
+  // 409 — not allowed from the request's current state (someone else holds it,
+  // it already ended, or you are not who may do this). `body.claim` shows who.
+  'claim_conflict',
+  // 422 — the asker tried to claim their own request.
+  'claim_own_request',
+  // 422 — claim requests exist only in private standard rooms.
+  'claim_private_rooms_only',
+  // 404 — no claim request with that notification id in this room.
+  'claim_not_found',
+  // 422, on create — the request text is missing or over 120 characters.
+  'claim_request_invalid',
+  // 422, on create — the first ping must be `running`.
+  'claim_must_start_running',
+  // 422, on create — `deadline_at` is in the past or more than 8 hours away.
+  'claim_deadline_out_of_range',
+] as const;
+
+/**
  * Codes any route can answer, whatever the surface, so they sit in no
  * per-surface union.
  *
@@ -143,6 +167,9 @@ export type QuickActionErrorCode = (typeof QUICK_ACTION_ERROR_CODES)[number];
 /** @see REQUEST_LIMIT_ERROR_CODES */
 export type RequestLimitErrorCode = (typeof REQUEST_LIMIT_ERROR_CODES)[number];
 
+/** @see LIVE_CLAIM_ERROR_CODES */
+export type LiveClaimErrorCode = (typeof LIVE_CLAIM_ERROR_CODES)[number];
+
 /** @see HANDOFF_ERROR_CODES */
 export type HandoffErrorCode = (typeof HANDOFF_ERROR_CODES)[number];
 
@@ -158,6 +185,7 @@ export type AgentErrorCode =
   | RoomScopedErrorCode
   | AgentInboxErrorCode
   | QuickActionErrorCode
+  | LiveClaimErrorCode
   | RequestLimitErrorCode
   | CommonErrorCode;
 
