@@ -836,14 +836,18 @@ await pr.live.push('AB12CD', liveStatus.matchup('game-3', {
 A **claim request** asks the room "who's on it?" and lets one member take it. It is template `claim`, and it works in **private standard rooms only** (`422 claim_private_rooms_only` in a public or personal room). Pass the request text as `title` (1 to 120 characters, or `live_status.message` without a title). An optional `deadline_at` must be in the future and at most 8 hours away. The first ping must be `running`. The server writes the claim itself and ignores any `claim` block you send.
 
 ```ts
-const { notification_id } = await pr.live.push('AB12CD', liveStatus.claim(
+// The asking credential acts for the room owner.
+// The claiming credential must act for a different human member of that room.
+const asker = new PingRoom({ token: process.env.ASKER_AGENT_TOKEN });
+const member = new PingRoom({ token: process.env.MEMBER_AGENT_TOKEN });
+const { notification_id } = await asker.live.push('AB12CD', liveStatus.claim(
   'milk-1',
   { state: 'running', deadline_at: Math.floor(Date.now() / 1000) + 3600 },
   { title: 'Buy milk' },
 ));
 
-// Act as the human this credential belongs to. Needs only room membership.
-const taken = await pr.live.claim('AB12CD', notification_id, 'claim');
+// The claiming credential acts for another member, who is not the asker.
+const taken = await member.live.claim('AB12CD', notification_id, 'claim');
 console.log(taken.claim.status, taken.claim.by?.name, taken.idempotent);
 ```
 
@@ -856,13 +860,13 @@ console.log(taken.claim.status, taken.claim.by?.name, taken.idempotent);
 | `done` | the claimer, or the asker at any time | open (asker only) or claimed | done |
 | `cancel` | the asker, or a room owner or admin | open or claimed | cancelled |
 
-The asker is the stream's sender. For an agent credential that is the human it acts for. Two claims at the same moment have one winner. The other throws `PingRoomError` `claim_conflict` (409), whose `body.claim` names who holds it. Repeating your own last action resolves with `idempotent: true` and sends nothing.
+The asker is the stream's sender, or the room owner for an agent or webhook stream. Two claims at the same moment have one winner. The other throws `PingRoomError` `claim_conflict` (409), whose `body.claim` names who holds it. Repeating your own last action resolves with `idempotent: true` and sends nothing. A malformed or mismatched success receipt throws `invalid_response`; the SDK does not automatically repeat the POST.
 
 ```ts
 import { PingRoomError } from '@pingroom/sdk';
 
 try {
-  await pr.live.claim('AB12CD', notification_id, 'claim');
+  await member.live.claim('AB12CD', notification_id, 'claim');
 } catch (error) {
   if (error instanceof PingRoomError && error.code === 'claim_conflict') {
     const { claim } = error.body as { claim: { by?: { name: string } } };

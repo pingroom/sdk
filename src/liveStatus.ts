@@ -122,7 +122,7 @@ export interface LiveClaimParty {
   name: string;
   color?: string;
   emoji?: string;
-  image_url?: string;
+  image_url?: string | null;
 }
 
 /** The server-owned `claim` block of a claim request. */

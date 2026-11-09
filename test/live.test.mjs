@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { LIVE_CLAIM_ERROR_CODES, PingRoom, PingRoomError } from '../dist/index.js';
 
 test('a room-scoped 403 room_not_granted propagates instead of reading as "no stream"', async () => {
@@ -62,6 +64,97 @@ test('live.claim posts the action to the agent transition route and returns the 
   assert.equal(result.idempotent, false);
 });
 
+const claimReceipt = (overrides = {}) => ({
+  notification_id: NOTIFICATION_ID, correlation_id: 'milk-1', state: 'running', idempotent: false,
+  claim: { status: 'claimed', by: { id: 'member-1', name: 'Alex', image_url: null }, at: 1794146700, late: false },
+  ...overrides,
+});
+
+test('live.claim accepts each documented transition and idempotent receipt without dropping additive fields', async () => {
+  for (const [action, status, state] of [
+    ['claim', 'claimed', 'running'], ['release', 'open', 'running'], ['done', 'done', 'done'], ['cancel', 'cancelled', 'failed'],
+  ]) for (const idempotent of [false, true]) {
+    const receipt = claimReceipt({ state, idempotent, extra: 'future-field' });
+    receipt.claim.status = status;
+    if (action === 'release' || action === 'cancel') Object.assign(receipt.claim, { by: null, at: null });
+    let calls = 0;
+    const pr = new PingRoom({ token: 't', fetch: async () => {
+      calls += 1;
+      return new Response(JSON.stringify(receipt));
+    } });
+    assert.deepEqual(await pr.live.claim('AB12CD', NOTIFICATION_ID.toUpperCase(), action), receipt);
+    assert.equal(calls, 1);
+  }
+});
+
+test('live.claim rejects malformed or misattributed success receipts without replaying the POST', async () => {
+  const invalid = [
+    null, [], {}, true, 1,
+    claimReceipt({ notification_id: 'another-notification' }),
+    claimReceipt({ notification_id: undefined }),
+    claimReceipt({ correlation_id: '' }),
+    claimReceipt({ idempotent: 'true' }),
+    claimReceipt({ idempotent: undefined }),
+    claimReceipt({ state: 'done' }),
+    claimReceipt({ claim: null }),
+    ...[
+      { status: 'open' }, { status: 'other' }, { by: [] }, { by: { name: 'Alex' } },
+      { by: { id: 'member-1' } }, { by: 'Alex' }, { at: undefined }, { at: '1794146700' }, { late: 0 },
+    ].map((change) => { const receipt = claimReceipt(); Object.assign(receipt.claim, change); return receipt; }),
+  ];
+  for (const body of invalid) {
+    let calls = 0;
+    const pr = new PingRoom({ token: 't', fetch: async (_url, init) => {
+      calls += 1;
+      assert.equal(init.method, 'POST');
+      return new Response(JSON.stringify(body));
+    } });
+    await assert.rejects(
+      pr.live.claim('AB12CD', NOTIFICATION_ID, 'claim'),
+      (error) => error instanceof PingRoomError && error.code === 'invalid_response' && error.status === 0,
+      JSON.stringify(body),
+    );
+    assert.equal(calls, 1);
+  }
+});
+
+test('live.claim preserves refusal status, code and body without replaying the POST', async () => {
+  for (const [status, code] of [[409, 'claim_conflict'], [422, 'claim_own_request'], [403, 'forbidden'], [404, 'claim_not_found']]) {
+    const body = { code, message: 'Refused', ...(status === 409 || status === 422 ? { claim: claimReceipt().claim, state: 'running' } : {}) };
+    let calls = 0;
+    const pr = new PingRoom({ token: 't', fetch: async () => {
+      calls += 1;
+      return new Response(JSON.stringify(body), { status });
+    } });
+    await assert.rejects(pr.live.claim('AB12CD', NOTIFICATION_ID, 'claim'), (error) => {
+      assert.equal(error.status, status);
+      assert.equal(error.code, code);
+      assert.deepEqual(error.body, body);
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+test('LiveClaimParty accepts the documented null image URL and rejects a numeric one', () => {
+  const filename = fileURLToPath(new URL('./live-claim-contract.mts', import.meta.url));
+  const source = `
+    import type { LiveClaimParty } from '../dist/index.js';
+    const party: LiveClaimParty = { id: 'member-1', name: 'Alex', image_url: null };
+    const image: string | null | undefined = party.image_url;
+    // @ts-expect-error avatar image URLs cannot be numbers
+    const invalid: LiveClaimParty = { id: 'member-1', name: 'Alex', image_url: 42 };
+    void [image, invalid];
+  `;
+  const options = { strict: true, noEmit: true, skipLibCheck: true, target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext };
+  const host = ts.createCompilerHost(options), read = host.readFile.bind(host), exists = host.fileExists.bind(host);
+  host.readFile = (path) => path === filename ? source : read(path);
+  host.fileExists = (path) => path === filename || exists(path);
+  const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram([filename], options, host));
+  assert.equal(diagnostics.length, 0, ts.formatDiagnosticsWithColorAndContext(diagnostics, host));
+});
+
 test('live.claim throws a coded PingRoomError whose body names who got it first', async () => {
   const claim = { status: 'claimed', by: { id: 'u2', name: 'Sam' }, at: 1794146700, late: false };
   const fetchMock = async () =>
@@ -79,6 +172,16 @@ test('live.claim throws a coded PingRoomError whose body names who got it first'
 test('live.claim refuses an empty notification id before any request', () => {
   const pr = new PingRoom({ token: 't', fetch: async () => { throw new Error('no request expected'); } });
   assert.throws(() => pr.live.claim('AB12CD', '', 'done'), (e) => e instanceof PingRoomError && e.code === 'invalid_request');
+});
+
+test('live.claim rejects unsupported JavaScript actions before any request', () => {
+  let calls = 0;
+  const pr = new PingRoom({ token: 't', fetch: async () => { calls += 1; return new Response('{}'); } });
+  for (const action of ['', 'take', 'constructor', '__proto__', null, undefined, 42, {}]) {
+    assert.throws(() => pr.live.claim('AB12CD', NOTIFICATION_ID, action),
+      (error) => error instanceof PingRoomError && error.code === 'invalid_request');
+  }
+  assert.equal(calls, 0);
 });
 
 test('the claim error codes are exported as a runtime union', () => {

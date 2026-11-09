@@ -11,6 +11,32 @@ import type {
   LiveStatusSnapshot,
 } from '../liveStatus.js';
 import { enc } from '../internal/request.js';
+import { isNonEmptyString, isRecord, sameId } from '../internal/validate.js';
+
+const CLAIM_OUTCOMES = {
+  claim: ['claimed', 'running'],
+  release: ['open', 'running'],
+  done: ['done', 'done'],
+  cancel: ['cancelled', 'failed'],
+} as const;
+
+function validateClaimResult(value: unknown, notificationId: string, action: LiveClaimAction): LiveClaimResult {
+  const expected = CLAIM_OUTCOMES[action];
+  const claim = isRecord(value) ? value['claim'] : undefined;
+  const party = isRecord(claim) ? claim['by'] : undefined;
+  if (!isRecord(value) || !sameId(value['notification_id'], notificationId)
+    || !isNonEmptyString(value['correlation_id']) || typeof value['idempotent'] !== 'boolean'
+    || !isRecord(claim) || !expected || claim['status'] !== expected[0] || value['state'] !== expected[1]
+    || typeof claim['late'] !== 'boolean'
+    || !(party === null || isRecord(party) && isNonEmptyString(party['id']) && typeof party['name'] === 'string')
+    || !(claim['at'] === null || typeof claim['at'] === 'number' && Number.isFinite(claim['at']))) {
+    throw new PingRoomError('PingRoom returned an invalid claim transition receipt.', {
+      code: 'invalid_response',
+      body: { expected_notification_id: notificationId, action },
+    });
+  }
+  return value as unknown as LiveClaimResult;
+}
 
 /**
  * Live-status streams — a self-updating card on the room members' lock screen.
@@ -73,14 +99,19 @@ export class LiveApi {
    * `claim_private_rooms_only` (422), `claim_not_found` (404) or `forbidden`
    * (403). On 409 and 422 `error.body` is a `LiveClaimRefusal` carrying the
    * request as it stands, so you can say who got it first.
+   * A malformed or mismatched success throws `invalid_response`; the SDK
+   * never repeats the transition POST automatically.
    */
   claim(inviteCode: string, notificationId: string, action: LiveClaimAction): Promise<LiveClaimResult> {
     requireNonEmpty(inviteCode, 'inviteCode');
     requireNonEmpty(notificationId, 'notificationId');
-    return this.http.request(
+    if (typeof action !== 'string' || !Object.hasOwn(CLAIM_OUTCOMES, action)) {
+      throw new PingRoomError('`action` must be claim, release, done or cancel.', { code: 'invalid_request' });
+    }
+    return this.http.request<unknown>(
       'POST',
       `/api/agent/rooms/${enc(inviteCode)}/live/${enc(notificationId)}/claim`,
       { body: { action } },
-    );
+    ).then((value) => validateClaimResult(value, notificationId, action));
   }
 }
