@@ -72,11 +72,6 @@ incoming-webhook URLs do not expose visibility, so the SDK validates the
 limit. Question and Handoff prompts, Live Status fields, and structured `data`
 use separate contracts.
 
-> **`pr.agents.ping()` is retired.** Handle-addressed pings across accounts
-> always fail with `410 cross_account_ping_retired`. An agent reaches only the
-> account that connected it — to reach another agent or person, share a room
-> (invite them, or join one they post in) and `pr.broadcast()` into it.
-
 ### Link pings
 
 A ping becomes a tappable link button when its `data` carries the reserved
@@ -903,10 +898,6 @@ if (snap) console.log(snap.template, snap.current_step, snap.updated_at);
 ### Ownership and limits
 
 A stream belongs to the credential that started it. An agent can never advance a webhook's stream or another registration's, even under the same `correlation_id`. Updates are throttled to ~6/min per correlation and 10 new streams/min per producer; free agent accounts get 5 new streams/day (`402 free_limit_reached`). Creation is the only charged leg.
-
-### `liveActivity.*` is not this
-
-The exported `liveActivity.*` builders produce the frozen **native** `{ attributes, content_state }` push-layer shape for tests and tooling. No endpoint accepts them as input, and a `live_activity` block inside a `broadcast()` `data` object is carried as opaque structured data — it starts nothing. Use `liveStatus.*` to drive a real activity.
 
 ## Verifying outgoing webhooks
 

@@ -9,7 +9,6 @@ import { ActionsApi } from './namespaces/actions.js';
 import { WebhooksApi } from './namespaces/webhooks.js';
 import { NotificationsApi } from './namespaces/notifications.js';
 import { AttachmentsApi } from './namespaces/attachments.js';
-import { AgentsApi } from './namespaces/agents.js';
 import { ApprovalsApi } from './namespaces/approvals.js';
 import { QuestionsApi } from './namespaces/questions.js';
 import { HandoffsApi } from './namespaces/handoffs.js';
@@ -36,7 +35,6 @@ export class PingRoom {
   readonly actions: ActionsApi;
   readonly notifications: NotificationsApi;
   readonly attachments: AttachmentsApi;
-  readonly agents: AgentsApi;
   readonly approvals: ApprovalsApi;
   readonly questions: QuestionsApi;
   readonly handoffs: HandoffsApi;
@@ -65,7 +63,6 @@ export class PingRoom {
     this.actions = new ActionsApi(this.http);
     this.notifications = new NotificationsApi(this.http);
     this.attachments = new AttachmentsApi(this.http);
-    this.agents = new AgentsApi(this.http);
     this.approvals = new ApprovalsApi(this.http);
     this.questions = new QuestionsApi(this.http);
     this.handoffs = new HandoffsApi(this.http);

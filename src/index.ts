@@ -71,6 +71,7 @@ export type {
 
 export { liveStatus } from './liveStatus.js';
 export type {
+  LiveActivityTemplate,
   LiveStatus,
   LiveStatusState,
   LiveStatusCategory,
@@ -88,17 +89,6 @@ export type {
   LiveStatusResult,
   LiveStatusSnapshot,
 } from './liveStatus.js';
-
-export { liveActivity } from './liveActivity.js';
-export type {
-  LiveActivityTemplate,
-  LiveActivityStatus,
-  LiveActivityMetric,
-  LiveActivityOption,
-  LiveActivitySide,
-  LiveActivityIdentity,
-  LiveActivityData,
-} from './liveActivity.js';
 
 export { VERSION } from './version.js';
 

@@ -20,13 +20,17 @@
  * takes on. It starts like any stream, but it then moves only through
  * `pr.live.claim()` (claim, release, done, cancel), not through further
  * `live_status` legs. See https://pingroom.io/liveactivities.md.
- *
- * Not to be confused with `liveActivity.*` in ./liveActivity.ts, which builds
- * the frozen *native* `{ attributes, content_state }` push shape for tests and
- * tooling. These builders produce the `live_status` object you actually send.
  */
 
-import type { LiveActivityTemplate } from './liveActivity.js';
+export type LiveActivityTemplate =
+  | 'status'
+  | 'steps'
+  | 'progress'
+  | 'metrics'
+  | 'countdown'
+  | 'question'
+  | 'matchup'
+  | 'claim';
 
 export type LiveStatusState = 'running' | 'done' | 'failed';
 

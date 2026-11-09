@@ -15,22 +15,20 @@ test('quick ping page slots survive SDK send, edit, trigger, and webhook request
   const { pr, calls, fetch } = setup(200, { success: true });
   for (const slot of [4, 5, 8, 9, 12, 13, 16]) {
     await pr.broadcast('AB12', { message: 'Ready', action_number: slot });
-    await pr.agents.ping('agt_test', { message: 'Ready', action_number: slot });
     await pr.actions.update('AB12', slot, { label: '', icon: '✅' });
     await pr.actions.trigger('AB12', slot);
     await pr.webhooks.create('AB12', { name: 'Build', action_number: slot });
     await sendIncomingWebhook('https://api.pingroom.io/api/webhooks/AB12/test', { message: 'Ready', action: slot }, { fetch });
 
-    const requests = calls.slice(-6);
+    const requests = calls.slice(-5);
     assert.equal(requests[0].body.action_number, slot);
-    assert.equal(requests[1].body.action_number, slot);
-    assert.equal(requests[2].path, `/api/agent/rooms/AB12/actions/${slot}`);
-    assert.deepEqual(requests[2].body, { label: '', icon: '✅' });
-    assert.equal(requests[3].path, `/api/agent/rooms/AB12/actions/${slot}/trigger`);
-    assert.equal(requests[4].body.action_number, slot);
-    assert.equal(requests[5].body.action, slot);
+    assert.equal(requests[1].path, `/api/agent/rooms/AB12/actions/${slot}`);
+    assert.deepEqual(requests[1].body, { label: '', icon: '✅' });
+    assert.equal(requests[2].path, `/api/agent/rooms/AB12/actions/${slot}/trigger`);
+    assert.equal(requests[3].body.action_number, slot);
+    assert.equal(requests[4].body.action, slot);
   }
-  assert.equal(calls.length, 42);
+  assert.equal(calls.length, 35);
 });
 
 test('quick ping batches preserve four slots, all 16 slots, and sparse page edits', async () => {

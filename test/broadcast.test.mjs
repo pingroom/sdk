@@ -108,24 +108,3 @@ test('broadcast rejects only the public ceiling locally and leaves private-room 
   );
   assert.equal(requests, 0);
 });
-
-test('agents.ping hits the handle path', async () => {
-  const { calls, fetchMock } = recorder({
-    'POST /api/agent/agents/agt_x/ping': () => ({
-      status: 201,
-      body: {
-        id: 'n',
-        target_handle: 'agt_x',
-        room_code: 'r',
-        message: 'hi',
-        correlation_id: null,
-        reply_to: null,
-        created_at: 'now',
-      },
-    }),
-  });
-  const pr = new PingRoom({ token: 't', fetch: fetchMock });
-  const r = await pr.agents.ping('agt_x', { message: 'hi' });
-  assert.equal(r.target_handle, 'agt_x');
-  assert.equal(calls[0].url.endsWith('/api/agent/agents/agt_x/ping'), true);
-});

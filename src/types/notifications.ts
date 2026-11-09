@@ -251,18 +251,6 @@ export interface PingResult {
   [key: string]: unknown;
 }
 
-export interface DirectPingResult {
-  id: string;
-  target_handle: string;
-  room_code: string;
-  message: string;
-  correlation_id: string | null;
-  reply_to: string | null;
-  action_state?: ActionState | null;
-  created_at: string;
-  [key: string]: unknown;
-}
-
 /**
  * The named fields of a listened/listed notification, without the index
  * signature. `Omit` collapses a type carrying a string index signature down to

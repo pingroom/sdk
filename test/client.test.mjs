@@ -53,7 +53,7 @@ test('maps the API error code and never leaks the token', async () => {
     new Response(JSON.stringify({ code: 'pings_closed', message: 'closed' }), { status: 403 });
   const pr = new PingRoom({ token: 'super_secret_token', fetch: fetchMock });
   await assert.rejects(
-    () => pr.agents.ping('agt_x', { message: 'hi' }),
+    () => pr.broadcast('AB12', { message: 'hi' }),
     (e) => {
       assert.ok(e instanceof PingRoomError);
       assert.equal(e.code, 'pings_closed');
