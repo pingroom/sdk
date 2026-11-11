@@ -68,6 +68,71 @@ export function assertStructuredData(data: unknown): void {
   }
 }
 
+/** Mirrors `App\Support\PingTagRules`: at most 10 tags, each 1–32 characters. */
+export const MAX_PING_TAGS = 10;
+export const MAX_PING_TAG_LENGTH = 32;
+/** A letter or digit first, then letters, digits, `-` and `_`. Matches a tag as the server stores it. */
+export const PING_TAG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+/**
+ * What the server does to a tag before it checks it: trim, then lowercase
+ * ASCII only (PHP 8's `strtolower`), so a non-ASCII letter never folds into a
+ * valid one. The trim set is a superset of the server's, so this is never
+ * stricter than the route behind it.
+ */
+function normalizeTag(tag: string): string {
+  return tag.replace(/^[\s\uFEFF\u200B]+|[\s\uFEFF\u200B]+$/g, '').replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+function tagShape(): string {
+  return `a tag is 1 to ${MAX_PING_TAG_LENGTH} characters: lowercase letters, digits, "-" and "_", starting with a letter or digit`;
+}
+
+function assertTagText(tag: string, field: string): void {
+  if (!PING_TAG_PATTERN.test(tag)) {
+    throw new PingRoomError(
+      `\`${field}\` ${JSON.stringify(tag.length > 40 ? `${tag.slice(0, 40)}…` : tag)} is not a valid tag: ${tagShape()}.`,
+      { code: 'invalid_request' },
+    );
+  }
+}
+
+/**
+ * Check a ping's `tags` the way the server does: trimmed, lowercased, blanks
+ * dropped and duplicates removed first, then at most 10, each matching the tag
+ * rule. The payload is sent as given; the server normalizes it the same way, so
+ * `['Deploy ', 'deploy']` is one tag.
+ */
+export function assertTags(tags: unknown, field = 'tags'): void {
+  if (tags === undefined || tags === null) {
+    return;
+  }
+  if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== 'string')) {
+    throw new PingRoomError(`\`${field}\` must be an array of strings.`, { code: 'invalid_request' });
+  }
+  const normalized = [...new Set((tags as string[]).map(normalizeTag).filter((tag) => tag !== ''))];
+  if (normalized.length > MAX_PING_TAGS) {
+    throw new PingRoomError(
+      `\`${field}\` may have at most ${MAX_PING_TAGS} tags (got ${normalized.length}).`,
+      { code: 'invalid_request' },
+    );
+  }
+  for (const tag of normalized) {
+    assertTagText(tag, field);
+  }
+}
+
+/** Check the single `tag` a read filters by, with the same rule as one entry of `tags`. */
+export function assertTag(tag: unknown, field = 'tag'): void {
+  if (tag === undefined) {
+    return;
+  }
+  if (typeof tag !== 'string') {
+    throw new PingRoomError(`\`${field}\` must be a string.`, { code: 'invalid_request' });
+  }
+  assertTagText(normalizeTag(tag), field);
+}
+
 export function assertActionNumber(n: unknown): void {
   if (n === undefined || n === null) {
     return;

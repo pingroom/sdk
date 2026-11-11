@@ -189,6 +189,12 @@ export interface LiveStatusPing {
   /** Quick-action slot 1–16 supplying the icon and sound. */
   action?: number;
   data?: Record<string, unknown>;
+  /**
+   * Up to 10 labels (each 1–32 characters of lowercase letters, digits, `-` and
+   * `_`, starting with a letter or digit), set when the first ping creates the
+   * stream. A later ping may repeat or omit them and never changes them.
+   */
+  tags?: string[];
   requires_ack?: boolean;
   ack_timeout_seconds?: number;
 }
@@ -217,6 +223,8 @@ export interface LiveStatusResult {
 export interface LiveStatusSnapshot {
   notification_id: string;
   correlation_id: string;
+  /** The tags the stream was created with, sorted; `[]` when none. */
+  tags?: string[];
   state: string | null;
   progress: number | null;
   message: string | null;

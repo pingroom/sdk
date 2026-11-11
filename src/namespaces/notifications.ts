@@ -3,7 +3,7 @@
 import { PingRoomError } from '../errors.js';
 import type { HttpClient } from '../http.js';
 import { sleep } from '../internal/async.js';
-import { requireNonEmpty } from '../internal/guards.js';
+import { assertTag, requireNonEmpty } from '../internal/guards.js';
 import { isTransientError, transientDelayMs } from '../internal/retry.js';
 import { isRecord } from '../internal/validate.js';
 import type {
@@ -45,6 +45,7 @@ export class NotificationsApi {
   /** Paginated list (polling fallback). Prefer wait()/listen() for real-time. */
   async list(input: ListNotificationsInput = {}): Promise<Paginated<NotificationHistoryEntry>> {
     const { notifications_per_page, ...query } = input;
+    assertTag(input.tag);
     const page = await this.http.request<Paginated<NotificationDetail>>('GET', '/api/agent/notifications', {
       query: dropUndefined({ ...query, limit: input.limit ?? notifications_per_page }),
     });
@@ -81,8 +82,9 @@ export class NotificationsApi {
 
   /** One long-poll: resolves as soon as new pings land, or with an empty list at timeout. */
   wait(input: WaitInput = {}): Promise<WaitResult> {
+    assertTag(input.tag);
     return this.http.request('GET', '/api/agent/notifications/wait', {
-      query: dropUndefined({ after: input.after, timeout: input.timeout, limit: input.limit }),
+      query: dropUndefined({ after: input.after, timeout: input.timeout, limit: input.limit, tag: input.tag }),
       timeoutMs: waitTimeoutMs(input.timeout),
       ...(input.signal ? { signal: input.signal } : {}),
     });
@@ -95,6 +97,7 @@ export class NotificationsApi {
    *   for await (const ping of pr.notifications.listen({ signal })) { ... }
    */
   async *listen(input: ListenInput = {}): AsyncGenerator<AgentNotification, void, void> {
+    assertTag(input.tag);
     let cursor = input.after;
     let headRead = cursor !== undefined;
     const backoffMs = input.backoffMs ?? 1000;
@@ -112,6 +115,7 @@ export class NotificationsApi {
             after: cursor,
             ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
             ...(input.limit !== undefined ? { limit: input.limit } : {}),
+            ...(input.tag !== undefined ? { tag: input.tag } : {}),
             ...(input.signal ? { signal: input.signal } : {}),
           })
           // No cursor yet: read the current head (an immediate, empty answer)

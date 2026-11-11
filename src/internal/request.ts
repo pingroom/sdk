@@ -6,6 +6,7 @@ import {
   assertActionNumber,
   assertMaxLength,
   assertStructuredData,
+  assertTags,
   MAX_PING_TITLE_LENGTH,
   MAX_PUBLIC_PING_MESSAGE_LENGTH,
   normalizeIdempotencyKey,
@@ -90,6 +91,7 @@ export function assertPing(ping: PingInput): void {
   assertMaxLength(ping.title, MAX_PING_TITLE_LENGTH, 'title');
   assertActionNumber(ping.action_number);
   assertStructuredData(ping.data);
+  assertTags(ping.tags);
 }
 
 export function waitTimeoutMs(seconds: number | undefined): number {

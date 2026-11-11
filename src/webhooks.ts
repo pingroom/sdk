@@ -18,6 +18,7 @@ import {
   assertActionNumber,
   assertMaxLength,
   assertStructuredData,
+  assertTags,
   MAX_PING_TITLE_LENGTH,
   MAX_PUBLIC_PING_MESSAGE_LENGTH,
   normalizeIdempotencyKey,
@@ -135,6 +136,13 @@ export interface IncomingWebhookPayload {
   correlation_id?: string;
   reply_to?: string;
   /**
+   * Up to 10 labels (each 1–32 characters of lowercase letters, digits, `-`
+   * and `_`, starting with a letter or digit) to file the ping under; the
+   * server trims, lowercases and de-duplicates them. On a `live_status` stream
+   * they are set when the stream is created and never changed by a later ping.
+   */
+  tags?: string[];
+  /**
    * Drive a Live Activity through this webhook. MUST be top-level — the server
    * detects `live_status` on the request body, and strips it from `data` so a
    * legacy-path caller cannot spoof completion alerts. Sending it nested under
@@ -207,6 +215,7 @@ export const INCOMING_WEBHOOK_FIELDS = [
   'data',
   'correlation_id',
   'reply_to',
+  'tags',
   'is_urgent',
   'requires_ack',
   'ack_mode',
@@ -229,6 +238,7 @@ export async function sendIncomingWebhook(
   assertMaxLength(payload.title, MAX_PING_TITLE_LENGTH, 'title');
   assertActionNumber(payload.action);
   assertStructuredData(payload.data);
+  assertTags(payload.tags);
 
   const body: Record<string, unknown> = {};
   for (const field of INCOMING_WEBHOOK_FIELDS) {

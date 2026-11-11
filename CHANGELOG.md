@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Tags on Pings. `broadcast()`, `sendIncomingWebhook()` and the `liveStatus.*` builders (`live.push()`) take `tags`: up to 10 labels, each 1–32 characters of lowercase letters, digits, `-` and `_`, starting with a letter or digit. The server trims, lowercases and de-duplicates them; the SDK checks them the same way first and sends what you gave it. A live-status stream's tags are set by its first ping and never changed by a later one. Reads return `tags` (sorted, `[]` when none) on `PingResult`, `NotificationDetail`, listed and listened notifications and the `live.get()` snapshot.
+- `notifications.list()`, `notifications.wait()` and `notifications.listen()` take `tag` to see only pings carrying it. `room_id`, already sent by `notifications.list()`, is now documented on `ListNotificationsInput`.
+
 ## 0.9.0 (2026-11-11)
 
 ### Fixed

@@ -22,6 +22,14 @@ export interface PingInput {
   correlation_id?: string;
   reply_to?: string;
   /**
+   * Up to 10 labels to file the ping under, so history can be filtered by one
+   * (`notifications.list({ tag })`, `notifications.wait({ tag })`). Each tag is
+   * 1–32 characters: lowercase letters, digits, `-` and `_`, starting with a
+   * letter or digit. The server trims, lowercases and de-duplicates them, so
+   * `['Deploy ', 'deploy']` is `['deploy']`.
+   */
+  tags?: string[];
+  /**
    * Ordered ids from `attachments.upload()` (max 4). Ids are single-use: the
    * send claims them, and an already-claimed or expired id fails the whole
    * ping. File bytes never ride this JSON body.
@@ -241,6 +249,8 @@ export interface PingResult {
   trigger_source: string | null;
   data?: JsonObject | null;
   correlation_id?: string | null;
+  /** The labels the sender put on the ping, sorted; `[]` when none. */
+  tags?: string[];
   reply_to?: string | null;
   attachments?: Attachment[];
   action_state?: ActionState | null;
@@ -271,6 +281,8 @@ interface AgentNotificationFields {
   is_handoff?: boolean;
   data?: JsonObject | null;
   correlation_id?: string | null;
+  /** The labels the sender put on the ping, sorted; `[]` when none. */
+  tags?: string[];
   reply_to?: string | null;
   attachments?: Attachment[];
   action_state?: ActionState | null;
@@ -327,7 +339,14 @@ export interface NotificationHistoryEntry extends AgentNotification {
 export interface ListNotificationsInput {
   /** `received` or `sent`; the server refuses any other value. */
   type?: 'received' | 'sent';
+  /** Only pings in this room (the room's id). */
   room_id?: string;
+  /**
+   * Only pings carrying this tag (see {@link PingInput.tags}). Applied after
+   * the room grant, what you can already read and the free plan's newest-100
+   * window, so it only narrows. Trimmed and lowercased by the server.
+   */
+  tag?: string;
   date?: string;
   /** Page size (1–25). Omit to retain the server's legacy default. */
   limit?: number;
@@ -344,6 +363,8 @@ export interface WaitInput {
   timeout?: number;
   /** Max notifications to return (1–100, default 50). */
   limit?: number;
+  /** Only wait for pings carrying this tag; other pings are skipped, not returned. */
+  tag?: string;
   signal?: AbortSignal;
 }
 
@@ -375,6 +396,8 @@ export interface ListenInput {
   timeout?: number;
   /** Max notifications per poll (1–100, default 50). */
   limit?: number;
+  /** Only yield pings carrying this tag. */
+  tag?: string;
   signal?: AbortSignal;
   /**
    * Called with each transient error (network failure, request timeout, 429,

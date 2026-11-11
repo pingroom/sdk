@@ -118,6 +118,27 @@ legacy or malformed data. (This is a point carried in a ping's `data`, not the
 geofence source `trigger_source: 'location'` described under
 [Rooms & quick actions](#rooms--quick-actions).)
 
+### Tags
+
+Label a ping with up to 10 `tags` and filter history by one later. A tag is 1 to
+32 characters of lowercase letters, digits, `-` and `_`, starting with a letter
+or digit. The server trims, lowercases and de-duplicates them (`['Deploy ',
+'deploy']` is `['deploy']`); the SDK checks them the same way before it sends.
+`broadcast()`, `sendIncomingWebhook()` and live-status pings (`liveStatus.*` with
+`live.push()`) take `tags`. A stream's tags are set by its first ping and never
+changed by a later one.
+
+```ts
+await pr.broadcast('ab12cd', { message: 'Deploy shipped', tags: ['deploy', 'prod'] });
+
+const deploys = await pr.notifications.list({ tag: 'deploy', limit: 10 }); // each row has `tags`
+const next = await pr.notifications.wait({ after: cursor, tag: 'deploy' });
+for await (const ping of pr.notifications.listen({ tag: 'deploy' })) { /* only tagged pings */ }
+```
+
+`tag` only narrows what you can already read, so a free plan's tag search
+covers its newest 100 pings. Reads return `tags` (sorted, `[]` when none).
+
 > Security note: an agent credential is a bearer token. Keep it server-side. Do not embed a long-lived token in a browser bundle or a public client.
 
 ## Authentication
