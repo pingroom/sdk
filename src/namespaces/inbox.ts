@@ -185,8 +185,8 @@ export class InboxApi {
             },
           ), questionId);
         } catch (error) {
-          // A dropped connection, a request deadline, a 429 (the wait routes
-          // share one 30/min bucket per human) or a 5xx is not an outcome:
+          // A dropped connection, a request deadline, a 429 (each wait route
+          // has its own 30/min bucket per human) or a 5xx is not an outcome:
           // retry it like every other wait, inside the overall deadline.
           // Anything else is permanent and surfaces.
           throwIfAborted(signal);

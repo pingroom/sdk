@@ -110,7 +110,11 @@ export interface LiveStatus {
   agent_id?: string;
 }
 
-/** Where a "Who's on it?" request stands. `open` and `claimed` are live; the rest are final. */
+/**
+ * Where a "Who's on it?" request stands. `open` and `claimed` are live; the rest
+ * are final. A request ends as `expired` when nobody took it by its deadline, or
+ * when its claimer let go of it after that deadline.
+ */
 export type LiveClaimStatus = 'open' | 'claimed' | 'done' | 'cancelled' | 'expired' | 'unfinished';
 
 /** What a member can do to a claim request. */
@@ -148,6 +152,12 @@ export interface LiveClaim {
  * The 200 body of `pr.live.claim()`. `idempotent` is true when the same person
  * repeated the action that already produced the current status, so nothing
  * changed and nothing was sent.
+ *
+ * Each action resolves with one `claim.status` / `state` pair: `claim` is
+ * `claimed` / `running`, `done` is `done` / `done` and `cancel` is `cancelled` /
+ * `failed`. `release` is `open` / `running`, or `expired` / `failed` when the
+ * request was already past its deadline, so letting go ended it instead of
+ * reopening it.
  */
 export interface LiveClaimResult {
   notification_id: string;

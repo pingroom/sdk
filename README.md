@@ -463,7 +463,7 @@ Retries and polls following an empty forward poll start at least 2.1 seconds
 after the previous poll started, even when `backoffMs` is smaller. This paces
 one loop's empty-response and retry traffic. The initial head read and nonempty
 batch draining remain immediate, and all listeners (the CLI, other agents)
-share the human's 30-requests-per-minute wait bucket. The default 20-second
+share the human's 30-requests-per-minute limit on that route. The default 20-second
 hold is unaffected.
 
 Or a single long-poll. Without `after`, `wait()` answers at once with no pings
@@ -524,7 +524,7 @@ approving `decision`, never on `decision !== 'Hold'`.
 return only a response for the id you asked about, in a known state. Anything
 else, such as an HTML page from a proxy, `{}`, or another approval, rejects with
 `invalid_response` instead of being returned as an outcome. The wait routes
-share a 30-requests-per-minute limit per human, so these loops retry a 429
+each have their own 30-requests-per-minute limit per human, shared by every waiter on that route, so these loops retry a 429
 after its `retryAfter`, and retry network errors and 5xx with a backoff capped
 at 30 s. Approval, question and handoff polls start at least 2.1 s apart (one
 loop stays under the limit), even if something in between answers `pending` at
@@ -851,9 +851,11 @@ console.log(taken.claim.status, taken.claim.by?.name, taken.idempotent);
 | Action | Who | From | To |
 |---|---|---|---|
 | `claim` | any member but the asker | open | claimed |
-| `release` | the claimer | claimed | open |
+| `release` | the claimer | claimed | open, or expired past the deadline |
 | `done` | the claimer, or the asker at any time | open (asker only) or claimed | done |
 | `cancel` | the asker, or a room owner or admin | open or claimed | cancelled |
+
+`release` returns the request to `open` only while it can still be taken. Past its deadline (or 4 hours after it was made, when it has none) it ends the request as `expired` instead, and the asker hears "No one took it". That is a 200, not an error: `claim.status` is `'expired'`, `state` is `'failed'`, and `claim.by` and `claim.at` are `null`. A retry resolves the same way with `idempotent: true`.
 
 The asker is the stream's sender, or the room owner for an agent or webhook stream. Two claims at the same moment have one winner. The other throws `PingRoomError` `claim_conflict` (409), whose `body.claim` names who holds it. Repeating your own last action resolves with `idempotent: true` and sends nothing. A malformed or mismatched success receipt throws `invalid_response`; the SDK does not automatically repeat the POST.
 

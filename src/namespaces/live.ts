@@ -6,6 +6,8 @@ import { assertStructuredData, requireNonEmpty } from '../internal/guards.js';
 import type {
   LiveClaimAction,
   LiveClaimResult,
+  LiveClaimStatus,
+  LiveClaimStreamState,
   LiveStatusPing,
   LiveStatusResult,
   LiveStatusSnapshot,
@@ -13,12 +15,19 @@ import type {
 import { enc } from '../internal/request.js';
 import { isNonEmptyString, isRecord, sameId } from '../internal/validate.js';
 
+/**
+ * What each action's 200 receipt may say, as `[claim.status, stream state]`
+ * pairs. `release` has two: letting go reopens a request that can still be
+ * taken, but a request past its deadline (or four hours old with none) ends as
+ * `expired` with stream state `failed`, exactly as time ends an open one. That
+ * is still a 200, and a retry replays it. Only `release` can end that way.
+ */
 const CLAIM_OUTCOMES = {
-  claim: ['claimed', 'running'],
-  release: ['open', 'running'],
-  done: ['done', 'done'],
-  cancel: ['cancelled', 'failed'],
-} as const;
+  claim: [['claimed', 'running']],
+  release: [['open', 'running'], ['expired', 'failed']],
+  done: [['done', 'done']],
+  cancel: [['cancelled', 'failed']],
+} as const satisfies Record<LiveClaimAction, ReadonlyArray<readonly [LiveClaimStatus, LiveClaimStreamState]>>;
 
 function validateClaimResult(value: unknown, notificationId: string, action: LiveClaimAction): LiveClaimResult {
   const expected = CLAIM_OUTCOMES[action];
@@ -26,7 +35,8 @@ function validateClaimResult(value: unknown, notificationId: string, action: Liv
   const party = isRecord(claim) ? claim['by'] : undefined;
   if (!isRecord(value) || !sameId(value['notification_id'], notificationId)
     || !isNonEmptyString(value['correlation_id']) || typeof value['idempotent'] !== 'boolean'
-    || !isRecord(claim) || !expected || claim['status'] !== expected[0] || value['state'] !== expected[1]
+    || !isRecord(claim) || !expected
+    || !expected.some(([status, state]) => claim['status'] === status && value['state'] === state)
     || typeof claim['late'] !== 'boolean'
     || !(party === null || isRecord(party) && isNonEmptyString(party['id']) && typeof party['name'] === 'string')
     || !(claim['at'] === null || typeof claim['at'] === 'number' && Number.isFinite(claim['at']))) {
@@ -89,6 +99,13 @@ export class LiveApi {
    * `claim` takes an open request (anyone but its asker), `release` lets go of
    * one you hold, `done` finishes it (its claimer, or its asker at any time) and
    * `cancel` withdraws it (its asker, or a room owner or admin).
+   *
+   * `release` returns the request to `open` only while it can still be taken.
+   * Past its deadline (or four hours after it was made, when it has none) it
+   * ends the request as `expired` instead: a 200 whose `claim.status` is
+   * `expired` and whose `state` is `failed`, with `claim.by` and `claim.at`
+   * `null`. It is not an error, and the asker hears "No one took it". No other
+   * action resolves that way.
    *
    * `notificationId` is the request's `notification_id`, from the `push()`
    * result or `notifications.list()`. It needs only room membership, not room

@@ -6,7 +6,7 @@ export const TRANSIENT_BACKOFF_BASE_MS = 1000;
 /**
  * The smallest backoff base, whatever a caller asks for. A persistent failure
  * would otherwise retry in a tight loop (a base of 0 never grows at all)
- * against wait routes shared at 30 requests a minute.
+ * against wait routes limited to 30 requests a minute each.
  */
 export const MIN_TRANSIENT_BACKOFF_MS = 250;
 /** Ceiling on the exponential backoff (a server Retry-After may ask for longer). */
@@ -25,7 +25,7 @@ export const WAIT_UNKNOWN_EXPIRY_OUTAGE_MS = 15 * 60_000;
 
 /**
  * A failure a read loop may retry: a dropped connection, a request deadline,
- * a 429 (the wait routes share one 30/min bucket per human), or a 5xx.
+ * a 429 (each wait route has its own 30/min bucket per human), or a 5xx.
  * Everything else — 401/403/404/422, a refused redirect, a malformed response —
  * is permanent and must surface to the caller.
  */

@@ -87,6 +87,63 @@ test('live.claim accepts each documented transition and idempotent receipt witho
   }
 });
 
+// What the server answers when a claimer lets go of a request past its deadline
+// (Claim::decide): a 200 with claim.status "expired", stream state "failed",
+// nobody holding it, and the request ended by the person who let go. A retry by
+// the same person replays it with idempotent: true.
+const expiredReleaseReceipt = (overrides = {}) => ({
+  notification_id: NOTIFICATION_ID, correlation_id: 'milk-1', state: 'failed', idempotent: false,
+  claim: { status: 'expired', by: null, at: null, late: false, realerted_at: 1794146000, ended_by: 'member-1' },
+  ...overrides,
+});
+
+test('live.claim release past the deadline resolves with the expired receipt, once, and keeps additive fields', async () => {
+  for (const idempotent of [false, true]) {
+    const receipt = expiredReleaseReceipt({ idempotent, extra: 'future-field' });
+    const seen = [];
+    const pr = new PingRoom({ token: 't', fetch: async (url, init) => {
+      seen.push({ path: new URL(url).pathname, method: init.method, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify(receipt), { status: 200 });
+    } });
+    const result = await pr.live.claim('AB12CD', NOTIFICATION_ID, 'release');
+    assert.deepEqual(result, receipt);
+    assert.equal(result.claim.status, 'expired');
+    assert.equal(result.state, 'failed');
+    assert.deepEqual(seen, [{ path: `/api/agent/rooms/AB12CD/live/${NOTIFICATION_ID}/claim`, method: 'POST', body: { action: 'release' } }]);
+  }
+});
+
+test('live.claim takes the expired receipt only for release, and only as expired with state failed', async () => {
+  const wrongPair = (status, state) => expiredReleaseReceipt({ state, claim: { ...expiredReleaseReceipt().claim, status } });
+  const cases = [
+    // The expired receipt is release's alone.
+    ...['claim', 'done', 'cancel'].map((action) => [action, expiredReleaseReceipt()]),
+    // Release takes open/running or expired/failed, nothing in between.
+    ['release', wrongPair('expired', 'running')],
+    ['release', wrongPair('expired', 'done')],
+    ['release', wrongPair('open', 'failed')],
+    ['release', wrongPair('unfinished', 'failed')],
+    ['release', wrongPair('cancelled', 'failed')],
+    // And an expired receipt is still checked like every other one.
+    ['release', expiredReleaseReceipt({ notification_id: 'another-notification' })],
+    ['release', expiredReleaseReceipt({ claim: { ...expiredReleaseReceipt().claim, late: 'false' } })],
+    ['release', expiredReleaseReceipt({ claim: { ...expiredReleaseReceipt().claim, at: '1794146700' } })],
+  ];
+  for (const [action, body] of cases) {
+    let calls = 0;
+    const pr = new PingRoom({ token: 't', fetch: async () => {
+      calls += 1;
+      return new Response(JSON.stringify(body));
+    } });
+    await assert.rejects(
+      pr.live.claim('AB12CD', NOTIFICATION_ID, action),
+      (error) => error instanceof PingRoomError && error.code === 'invalid_response' && error.status === 0,
+      `${action}: ${JSON.stringify(body)}`,
+    );
+    assert.equal(calls, 1);
+  }
+});
+
 test('live.claim rejects malformed or misattributed success receipts without replaying the POST', async () => {
   const invalid = [
     null, [], {}, true, 1,
