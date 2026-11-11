@@ -91,6 +91,7 @@ test('every replace refusal surfaces its status and code on the error', async ()
     [422, 'unsupported_source'],
     [409, 'replace_window_closed'],
     [409, 'replace_limit_reached'],
+    [409, 'ping_withdrawn'],
   ];
   assert.deepEqual(refusals.map(([, code]) => code), [...REPLACE_ERROR_CODES]);
 

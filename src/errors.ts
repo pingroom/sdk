@@ -161,6 +161,41 @@ export const REPLACE_ERROR_CODES = [
   'replace_window_closed',
   // 409 — the Ping has already been replaced 20 times.
   'replace_limit_reached',
+  // 409 — the Ping was taken back with `notifications.withdraw()`; a
+  // withdrawn Ping can no longer be replaced.
+  'ping_withdrawn',
+] as const;
+
+/**
+ * The coded refusals of `notifications.withdraw()` (POST
+ * `/api/agent/rooms/{inviteCode}/notifications/{notificationId}/withdraw`). A
+ * bare 404 with no `code` means the server has withdrawing a Ping switched off.
+ * Withdrawing a Ping that is already withdrawn is not a refusal: it answers 200
+ * and does nothing.
+ *
+ * Server: `PingWithdrawal` / `PingWithdrawalService`. The Ping rules are the
+ * replacement's own ({@link REPLACE_ERROR_CODES}), so the codes match, except
+ * that the window refusal is `withdraw_window_closed`.
+ */
+export const WITHDRAW_ERROR_CODES = [
+  // 404 — no Ping with that id in that room.
+  'notification_not_found',
+  // 403 — the Ping was not sent by this agent credential.
+  'not_ping_owner',
+  // 422 — a Ping in a public room or a personal room.
+  'unsupported_room',
+  // 422 — a Question, a handoff, a live progress stream, a "Who's on it?"
+  // request, a Ping that needs a confirmation, a Ping with a checklist, or a
+  // Ping that is not an ordinary agent send.
+  'unsupported_question',
+  'unsupported_handoff',
+  'unsupported_live_status',
+  'unsupported_claim',
+  'unsupported_ack',
+  'unsupported_checklist',
+  'unsupported_source',
+  // 409 — the Ping is 24 hours old or older.
+  'withdraw_window_closed',
 ] as const;
 
 /**
@@ -221,6 +256,9 @@ export type LiveClaimErrorCode = (typeof LIVE_CLAIM_ERROR_CODES)[number];
 /** @see REPLACE_ERROR_CODES */
 export type ReplaceErrorCode = (typeof REPLACE_ERROR_CODES)[number];
 
+/** @see WITHDRAW_ERROR_CODES */
+export type WithdrawErrorCode = (typeof WITHDRAW_ERROR_CODES)[number];
+
 /** @see METRIC_ERROR_CODES */
 export type MetricErrorCode = (typeof METRIC_ERROR_CODES)[number];
 
@@ -241,6 +279,7 @@ export type AgentErrorCode =
   | QuickActionErrorCode
   | LiveClaimErrorCode
   | ReplaceErrorCode
+  | WithdrawErrorCode
   | MetricErrorCode
   | RequestLimitErrorCode
   | CommonErrorCode;

@@ -181,6 +181,34 @@ something a replacement cannot do (`requires_ack`, `is_urgent`, `attachment_ids`
 `replace()` means the server has not switched replacing on yet, and a
 `replaceKey` is stored and ignored until it does.
 
+### Taking back a ping
+
+Take back a ping you already sent, and its notification is removed from each
+recipient's Lock Screen and Notification Center. The ping stays in the room's
+history with its text, marked `withdrawn_at`; unread counts do not change.
+
+```ts
+const ping = await pr.broadcast('ab12cd', { message: 'Deploy started' });
+const taken = await pr.notifications.withdraw('ab12cd', ping.id);
+taken.withdrawn_at; // when it was taken back (reads return `withdrawn_at`, `null` when never)
+```
+
+The same pings can be withdrawn as can be replaced: an ordinary ping you sent in
+a private room, under 24 hours old. A question, handoff, live progress card,
+"Who's on it?" request, a ping that needs a confirmation or has a checklist
+cannot, and `withdraw()` refuses each with its own `error.code`
+(`WITHDRAW_ERROR_CODES`, see [Errors](#errors)). Withdrawing a ping that is
+already withdrawn is a harmless no-op, it has no `idempotencyKey`, and it does
+not count against the free plan's daily agent ping limit. A withdrawn ping can no
+longer be replaced: `notifications.replace()` answers `ping_withdrawn`, and a
+`broadcast()` with that ping's `replaceKey` sends a new ping.
+
+Removal is best effort. A phone that is offline, has the app force-quit or
+restricts background activity keeps the notification until it next opens the app,
+and only recent builds of the iPhone and Android apps remove it (the web app, the
+Apple Watch and Vision Pro do not). A 404 with no `code` from `withdraw()` means
+the server has not switched withdrawing on yet.
+
 > Security note: an agent credential is a bearer token. Keep it server-side. Do not embed a long-lived token in a browser bundle or a public client.
 
 ## Authentication
@@ -1165,7 +1193,8 @@ surface, so you can branch exhaustively:
 | `RoomScopedErrorCode` / `ROOM_SCOPED_ERROR_CODES` | every call whose path names a room (`rooms.get`, `actions.*`, `broadcast`, `webhooks.*`, `live.*`) |
 | `AgentInboxErrorCode` / `AGENT_INBOX_ERROR_CODES` | `inbox.ensure()` / `inbox.activate()` |
 | `QuickActionErrorCode` / `QUICK_ACTION_ERROR_CODES` | `actions.*` and a `broadcast()` naming an `action_number`: `quick_action_input_required`, `quick_action_input_type`, `action_not_configured`, `pro_required`, `quick_action_layout_changed`, `quick_action_page_in_use`; and, on `actions.trigger()` with `trigger_source: 'location'` only, `location_trigger_owner_only` (403) and `location_trigger_inactive` (409) |
-| `ReplaceErrorCode` / `REPLACE_ERROR_CODES` | `notifications.replace()`: `notification_not_found` (404), `not_ping_owner` (403), `unsupported_room`, `unsupported_question`, `unsupported_handoff`, `unsupported_live_status`, `unsupported_claim`, `unsupported_ack`, `unsupported_checklist`, `unsupported_source` (422), `replace_window_closed` and `replace_limit_reached` (409) |
+| `ReplaceErrorCode` / `REPLACE_ERROR_CODES` | `notifications.replace()`: `notification_not_found` (404), `not_ping_owner` (403), `unsupported_room`, `unsupported_question`, `unsupported_handoff`, `unsupported_live_status`, `unsupported_claim`, `unsupported_ack`, `unsupported_checklist`, `unsupported_source` (422), `replace_window_closed`, `replace_limit_reached` and `ping_withdrawn` (409) |
+| `WithdrawErrorCode` / `WITHDRAW_ERROR_CODES` | `notifications.withdraw()`: `notification_not_found` (404), `not_ping_owner` (403), `unsupported_room`, `unsupported_question`, `unsupported_handoff`, `unsupported_live_status`, `unsupported_claim`, `unsupported_ack`, `unsupported_checklist`, `unsupported_source` (422) and `withdraw_window_closed` (409) |
 | `MetricErrorCode` / `METRIC_ERROR_CODES` | `metrics.*` and a webhook `metric`: `metrics_limit_reached` (422), `metric_not_found` (404) and `metric_exists` (409, never answered by the agent `set()`, which upserts) |
 | `CommonErrorCode` / `COMMON_ERROR_CODES` | any call: `rate_limited` (429, a route throttle; carries `retryAfter`) and `feature_disabled` (403, the operator switched the capability off; `error.body.feature` names the switch, for example `sending.attachments`, and retrying cannot succeed) |
 | `RequestLimitErrorCode` / `REQUEST_LIMIT_ERROR_CODES` | `payload_too_large` (HTTP 413 from the server on any oversized body) and `attachment_too_large` (raised locally by `attachments.upload()` above 5 MiB, before any bytes travel) |

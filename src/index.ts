@@ -29,6 +29,7 @@ export {
   ROOM_SCOPED_ERROR_CODES,
   QUICK_ACTION_ERROR_CODES,
   REQUEST_LIMIT_ERROR_CODES,
+  WITHDRAW_ERROR_CODES,
 } from './errors.js';
 export type {
   AgentErrorCode,
@@ -44,6 +45,7 @@ export type {
   ReplaceErrorCode,
   RequestLimitErrorCode,
   RoomScopedErrorCode,
+  WithdrawErrorCode,
 } from './errors.js';
 
 export {

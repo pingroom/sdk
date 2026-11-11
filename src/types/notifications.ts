@@ -299,6 +299,12 @@ export interface PingResult {
    * Absent otherwise.
    */
   replaced?: boolean;
+  /**
+   * When the sending agent took this Ping back (`notifications.withdraw()`);
+   * `null` when it never did. The Ping and its text stay in the room's history.
+   * Absent on a send that created a new Ping and on servers without withdrawing.
+   */
+  withdrawn_at?: string | null;
   created_at: string;
   recipient_count?: number;
   muted_count?: number;
@@ -337,6 +343,12 @@ interface AgentNotificationFields {
    * replaced); older servers omit it.
    */
   edited_at?: string | null;
+  /**
+   * When the sending agent took the ping back (`notifications.withdraw()`);
+   * `null` when never. Present on the same routes as `edited_at`; older servers
+   * omit it.
+   */
+  withdrawn_at?: string | null;
   /** Confirmation rule the ping was sent with; absent on older rows. */
   ack_mode?: AckMode;
   /**

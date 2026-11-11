@@ -95,6 +95,34 @@ export class NotificationsApi {
   }
 
   /**
+   * Take back a ping this credential already sent. The notification is removed
+   * from each recipient's Lock Screen and Notification Center, and the ping stays
+   * in the room's history with its text and `withdrawn_at` set. Unread counts do
+   * not change. The result is the ping.
+   *
+   *   const ping = await pr.broadcast('ab12cd', { message: 'Deploy started' });
+   *   await pr.notifications.withdraw('ab12cd', ping.id);
+   *
+   * Taking back a ping that is already withdrawn is a harmless no-op (it
+   * answers 200 and pushes nothing). It does not count against the free plan's
+   * daily agent ping limit, and a withdrawn ping can no longer be replaced.
+   *
+   * Only an ordinary ping you sent in a private room and under 24 hours old can
+   * be withdrawn, the same pings that can be replaced. Every refusal has its own
+   * `error.code` ({@link WITHDRAW_ERROR_CODES}); a 404 with no code means the
+   * server has withdrawing switched off.
+   *
+   * Removal is best effort: a phone that is offline, has the app force-quit or
+   * restricts background activity keeps the notification until it next opens
+   * the app, and only recent builds of the iPhone and Android apps remove it.
+   */
+  withdraw(inviteCode: string, notificationId: string): Promise<PingResult> {
+    requireNonEmpty(inviteCode, 'inviteCode');
+    requireNonEmpty(notificationId, 'notificationId');
+    return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/notifications/${enc(notificationId)}/withdraw`, { body: {} });
+  }
+
+  /**
    * One bounded long-poll for an ack-required ping. The returned state may
    * still be `open` when the hold timeout elapses; call again to keep waiting.
    */
