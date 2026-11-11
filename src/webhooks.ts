@@ -17,6 +17,7 @@ import { combineSignals } from './internal/async.js';
 import {
   assertActionNumber,
   assertMaxLength,
+  assertReplaceKey,
   assertStructuredData,
   assertTags,
   MAX_PING_TITLE_LENGTH,
@@ -143,6 +144,22 @@ export interface IncomingWebhookPayload {
    */
   tags?: string[];
   /**
+   * This webhook's own handle for "the Ping I keep updating" (1–64 characters:
+   * letters, digits, `.` `_` `:` `-`), sent as `replace_key`. A fire carrying
+   * one replaces this webhook's earlier Ping with that key in the room, in
+   * place, while that Ping is under 24 hours old, replaced fewer than 20 times
+   * and replaceable: the result is the same `notification_id` with
+   * `replaced: true`. Otherwise a new Ping is sent and keeps the key (no
+   * `replaced` key in the result).
+   *
+   * A fire that asks for something a replacement cannot do (`requires_ack`,
+   * `is_urgent`, `tags`, or a different `action`, `emoji`, `icon`, `color`,
+   * `correlation_id` or `reply_to`) always sends a new Ping. Not for
+   * `live_status`. While the server has replacing switched off the key is
+   * stored and ignored.
+   */
+  replaceKey?: string;
+  /**
    * Drive a Live Activity through this webhook. MUST be top-level — the server
    * detects `live_status` on the request body, and strips it from `data` so a
    * legacy-path caller cannot spoof completion alerts. Sending it nested under
@@ -187,6 +204,8 @@ export interface SendIncomingWebhookOptions {
 export interface IncomingWebhookResult {
   success: boolean;
   notification_id?: string;
+  /** `true` when a fire with a `replaceKey` replaced this webhook's earlier Ping instead of sending a new one. */
+  replaced?: boolean;
   message?: string;
   action_state?: ActionState | null;
   [key: string]: unknown;
@@ -203,6 +222,9 @@ export interface IncomingWebhookResult {
  * legacy webhook branch, and returned `success: true` having created no activity
  * at all), then `emoji`/`icon`/`color`/`sound`. Exported so a test can fail the
  * moment this list and the server contract diverge again.
+ *
+ * `replace_key` is also a server field, but the SDK takes it as `replaceKey`
+ * and maps it by hand in `sendIncomingWebhook`, so it is not in this list.
  */
 export const INCOMING_WEBHOOK_FIELDS = [
   'title',
@@ -239,12 +261,16 @@ export async function sendIncomingWebhook(
   assertActionNumber(payload.action);
   assertStructuredData(payload.data);
   assertTags(payload.tags);
+  assertReplaceKey(payload.replaceKey);
 
   const body: Record<string, unknown> = {};
   for (const field of INCOMING_WEBHOOK_FIELDS) {
     const value = payload[field];
     if (value !== undefined) body[field] = value;
   }
+  // `replaceKey` is the SDK's name for the wire field `replace_key`; it is the
+  // one field this list does not carry under its own name.
+  if (payload.replaceKey !== undefined) body['replace_key'] = payload.replaceKey;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

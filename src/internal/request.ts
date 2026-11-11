@@ -5,6 +5,7 @@ import { PingRoomError } from '../errors.js';
 import {
   assertActionNumber,
   assertMaxLength,
+  assertReplaceKey,
   assertStructuredData,
   assertTags,
   MAX_PING_TITLE_LENGTH,
@@ -12,7 +13,7 @@ import {
   normalizeIdempotencyKey,
   requireNonEmpty,
 } from './guards.js';
-import type { PingInput } from '../types.js';
+import type { PingInput, ReplacePingInput } from '../types.js';
 
 /** Extra wall-clock allowance over the server's hold window for long-poll calls. */
 const LONG_POLL_BUFFER_MS = 10_000;
@@ -92,6 +93,18 @@ export function assertPing(ping: PingInput): void {
   assertActionNumber(ping.action_number);
   assertStructuredData(ping.data);
   assertTags(ping.tags);
+  assertReplaceKey(ping.replaceKey);
+}
+
+/**
+ * The text and data of `notifications.replace()`. `title` and `data` may be
+ * `null` (clear) or omitted (keep); the message is required, as on a send.
+ */
+export function assertReplacePing(ping: ReplacePingInput): void {
+  requireNonEmpty(ping.message, 'message');
+  assertMaxLength(ping.message, MAX_PUBLIC_PING_MESSAGE_LENGTH, 'message');
+  assertMaxLength(ping.title, MAX_PING_TITLE_LENGTH, 'title');
+  assertStructuredData(ping.data);
 }
 
 export function waitTimeoutMs(seconds: number | undefined): number {

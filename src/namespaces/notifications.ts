@@ -14,11 +14,13 @@ import type {
   NotificationDetail,
   NotificationHistoryEntry,
   Paginated,
+  PingResult,
+  ReplacePingInput,
   WaitForAcknowledgementInput,
   WaitInput,
   WaitResult,
 } from '../types.js';
-import { enc, dropUndefined, MIN_LISTEN_POLL_INTERVAL_MS, waitTimeoutMs } from '../internal/request.js';
+import { assertReplacePing, enc, dropUndefined, MIN_LISTEN_POLL_INTERVAL_MS, waitTimeoutMs } from '../internal/request.js';
 
 /**
  * A 2xx that is not a wait answer (a captive portal's HTML, a proxy's error
@@ -62,6 +64,34 @@ export class NotificationsApi {
   getNotification(notificationId: string): Promise<NotificationDetail> {
     requireNonEmpty(notificationId, 'notificationId');
     return this.http.request('GET', `/api/agent/notifications/${enc(notificationId)}`);
+  }
+
+  /**
+   * Replace the title, message and data of a ping this credential already
+   * sent. The notification already on each recipient's phone changes in place:
+   * silently (no second notification, no sound) and with unread counts
+   * unchanged. The result is the ping, with `edited_at` set.
+   *
+   *   const ping = await pr.broadcast('ab12cd', { message: 'Build 41: running' });
+   *   await pr.notifications.replace('ab12cd', ping.id, { message: 'Build 41: green' });
+   *
+   * `title` and `data` keep their current value when omitted; `null` clears
+   * them. Sending the text and data the ping already has is a no-op: it
+   * answers 200 and pushes nothing. A replacement counts like a send against
+   * the free plan's daily agent ping limit, and has no `idempotencyKey`.
+   *
+   * Only an ordinary ping you sent in a private room, under 24 hours old and
+   * replaced fewer than 20 times, can be replaced. Every refusal has its own
+   * `error.code` ({@link REPLACE_ERROR_CODES}); a 404 with no code means the
+   * server has replacing switched off.
+   */
+  replace(inviteCode: string, notificationId: string, ping: ReplacePingInput): Promise<PingResult> {
+    requireNonEmpty(inviteCode, 'inviteCode');
+    requireNonEmpty(notificationId, 'notificationId');
+    assertReplacePing(ping);
+    return this.http.request('PUT', `/api/agent/rooms/${enc(inviteCode)}/notifications/${enc(notificationId)}`, {
+      body: dropUndefined({ message: ping.message, title: ping.title, data: ping.data }),
+    });
   }
 
   /**

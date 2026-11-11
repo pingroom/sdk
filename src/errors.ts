@@ -132,6 +132,38 @@ export const LIVE_CLAIM_ERROR_CODES = [
 ] as const;
 
 /**
+ * The coded refusals of `notifications.replace()` (PUT
+ * `/api/agent/rooms/{inviteCode}/notifications/{notificationId}`). A bare 404
+ * with no `code` means the server has replacing a Ping switched off.
+ *
+ * Server: `PingReplacement` / `PingReplacementService`. A `broadcast()` or
+ * `sendIncomingWebhook()` carrying `replaceKey` never answers these: when the
+ * earlier Ping cannot be replaced it sends a new one instead.
+ */
+export const REPLACE_ERROR_CODES = [
+  // 404 — no Ping with that id in that room.
+  'notification_not_found',
+  // 403 — the Ping was not sent by this agent credential.
+  'not_ping_owner',
+  // 422 — a Ping in a public room or a personal room.
+  'unsupported_room',
+  // 422 — a Question, a handoff, a live progress stream, a "Who's on it?"
+  // request, a Ping that needs a confirmation, a Ping with a checklist, or a
+  // Ping that is not an ordinary agent send.
+  'unsupported_question',
+  'unsupported_handoff',
+  'unsupported_live_status',
+  'unsupported_claim',
+  'unsupported_ack',
+  'unsupported_checklist',
+  'unsupported_source',
+  // 409 — the Ping is 24 hours old or older.
+  'replace_window_closed',
+  // 409 — the Ping has already been replaced 20 times.
+  'replace_limit_reached',
+] as const;
+
+/**
  * Codes any route can answer, whatever the surface, so they sit in no
  * per-surface union.
  *
@@ -170,6 +202,9 @@ export type RequestLimitErrorCode = (typeof REQUEST_LIMIT_ERROR_CODES)[number];
 /** @see LIVE_CLAIM_ERROR_CODES */
 export type LiveClaimErrorCode = (typeof LIVE_CLAIM_ERROR_CODES)[number];
 
+/** @see REPLACE_ERROR_CODES */
+export type ReplaceErrorCode = (typeof REPLACE_ERROR_CODES)[number];
+
 /** @see HANDOFF_ERROR_CODES */
 export type HandoffErrorCode = (typeof HANDOFF_ERROR_CODES)[number];
 
@@ -186,6 +221,7 @@ export type AgentErrorCode =
   | AgentInboxErrorCode
   | QuickActionErrorCode
   | LiveClaimErrorCode
+  | ReplaceErrorCode
   | RequestLimitErrorCode
   | CommonErrorCode;
 

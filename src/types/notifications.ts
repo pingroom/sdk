@@ -30,6 +30,22 @@ export interface PingInput {
    */
   tags?: string[];
   /**
+   * Your own handle for "the Ping I keep updating" (1–64 characters: letters,
+   * digits, `.` `_` `:` `-`), sent as `replace_key`. When this send carries one
+   * and you already sent a Ping with that key in this room that is under 24
+   * hours old, replaced fewer than 20 times and replaceable (see
+   * {@link NotificationsApi.replace}), the send replaces that Ping in place
+   * instead of adding one: the result is that Ping, with `replaced: true`.
+   * Otherwise a new Ping is sent and keeps the key.
+   *
+   * A send that asks for something a replacement cannot do (`requires_ack`,
+   * `is_urgent`, `attachment_ids`, `tags`, `action_number`, or a
+   * `correlation_id`, `reply_to` or `action_icon` that differs from the stored
+   * one) always sends a new Ping. While the server has replacing switched off
+   * the key is stored and ignored.
+   */
+  replaceKey?: string;
+  /**
    * Ordered ids from `attachments.upload()` (max 4). Ids are single-use: the
    * send claims them, and an already-claimed or expired id fails the whole
    * ping. File bytes never ride this JSON body.
@@ -68,6 +84,23 @@ export interface PingInput {
    * server replays the first result instead of sending the ping again.
    */
   idempotencyKey?: string;
+}
+
+/**
+ * The new text and data of a Ping you already sent
+ * ({@link NotificationsApi.replace}). Only these three can change; everything
+ * else about the Ping (sender, time, tags, attachments, read state) stays.
+ */
+export interface ReplacePingInput {
+  /** The new visible body (≤ 120 characters in private rooms). Required. */
+  message: string;
+  /** The new title (≤ 40 characters). Omit to keep it; `null` or `''` clears it. */
+  title?: string | null;
+  /**
+   * The new structured data, replacing the old (same rules as a send's, minus
+   * `data.checklist`). Omit to keep the current data; `null` clears it.
+   */
+  data?: JsonObject | null;
 }
 
 /**
@@ -254,6 +287,18 @@ export interface PingResult {
   reply_to?: string | null;
   attachments?: Attachment[];
   action_state?: ActionState | null;
+  /**
+   * When the sender last replaced this Ping's text (`notifications.replace()`
+   * or a send with a `replaceKey`); `null` when it never was. Absent on a send
+   * that created a new Ping and on servers without replacing.
+   */
+  edited_at?: string | null;
+  /**
+   * `true` on a `broadcast()` with a `replaceKey` that replaced your earlier
+   * Ping (this result is that Ping, HTTP 200) instead of sending a new one.
+   * Absent otherwise.
+   */
+  replaced?: boolean;
   created_at: string;
   recipient_count?: number;
   muted_count?: number;
@@ -286,6 +331,12 @@ interface AgentNotificationFields {
   reply_to?: string | null;
   attachments?: Attachment[];
   action_state?: ActionState | null;
+  /**
+   * When the sender last replaced this ping's text; `null` when never. On the
+   * list, listen and read routes the key is always present (`null` when never
+   * replaced); older servers omit it.
+   */
+  edited_at?: string | null;
   /** Confirmation rule the ping was sent with; absent on older rows. */
   ack_mode?: AckMode;
   /**

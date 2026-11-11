@@ -93,12 +93,18 @@ export class PingRoom {
    * Broadcast a ping to every member of a room you own. Pass `idempotencyKey`
    * and reuse it when retrying after a timeout or network error, so a send
    * the server already committed is replayed rather than delivered twice.
+   *
+   * Pass `replaceKey` to keep updating one ping instead of sending a new one
+   * each time: while your earlier ping with that key is replaceable the call
+   * replaces it in place and resolves with that ping and `replaced: true`.
    */
   broadcast(inviteCode: string, ping: PingInput): Promise<PingResult> {
     assertPing(ping);
     const { body, headers } = splitIdempotencyKey(ping);
+    // `replaceKey` is the SDK's name for the wire field `replace_key`.
+    const { replaceKey, ...fields } = body;
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/notifications`, {
-      body: dropUndefined({ ...body }),
+      body: dropUndefined({ ...fields, replace_key: replaceKey }),
       ...(headers ? { headers } : {}),
     });
   }

@@ -253,6 +253,8 @@ const SERVER_WEBHOOK_FIELDS = [
   'live_status',
 ];
 
+// `replace_key` is the one server field the SDK takes under another name
+// (`replaceKey`), so it is not in INCOMING_WEBHOOK_FIELDS; see replace.test.mjs.
 test('the incoming-webhook allowlist matches the server contract exactly', () => {
   assert.deepEqual([...INCOMING_WEBHOOK_FIELDS], SERVER_WEBHOOK_FIELDS);
 });

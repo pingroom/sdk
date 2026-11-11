@@ -139,6 +139,48 @@ for await (const ping of pr.notifications.listen({ tag: 'deploy' })) { /* only t
 `tag` only narrows what you can already read, so a free plan's tag search
 covers its newest 100 pings. Reads return `tags` (sorted, `[]` when none).
 
+### Replacing a ping
+
+Change what a ping you already sent says, and the notification on each
+recipient's phone changes in place: silently, with no second notification, no
+sound and unread counts unchanged. Good for a build that goes from "running" to
+"green".
+
+```ts
+const ping = await pr.broadcast('ab12cd', { message: 'Build 41: running' });
+const edited = await pr.notifications.replace('ab12cd', ping.id, { message: 'Build 41: green' });
+edited.edited_at; // when it was last replaced (reads return `edited_at`, `null` when never)
+```
+
+`title` and `data` keep their current value when omitted; `null` clears them.
+Sending the text and data the ping already has is a harmless no-op. A
+replacement has no `idempotencyKey`, and it counts like a send against the free
+plan's daily agent ping limit.
+
+A script that cannot keep the id passes a `replaceKey` (1 to 64 characters:
+letters, digits, `.` `_` `:` `-`) to `broadcast()` or `sendIncomingWebhook()`.
+A send with a key replaces your earlier ping with the same key in that room
+(same agent credential, or same webhook) instead of sending a new one, and
+resolves with that ping and `replaced: true`. Otherwise it sends a new ping that
+keeps the key.
+
+```ts
+await pr.broadcast('ab12cd', { message: 'Build 41: running', replaceKey: 'build-41' }); // new ping
+await pr.broadcast('ab12cd', { message: 'Build 41: green', replaceKey: 'build-41' });   // replaces it, replaced: true
+```
+
+Only an ordinary ping you sent in a private room, under 24 hours old and
+replaced fewer than 20 times, can be replaced. A question, handoff, live
+progress card, "Who's on it?" request, a ping that needs a confirmation or has a
+checklist cannot. `notifications.replace()` refuses each of those with its own
+`error.code` (`REPLACE_ERROR_CODES`, see [Errors](#errors)); a send with a
+`replaceKey` that cannot replace simply sends a new ping. A send that asks for
+something a replacement cannot do (`requires_ack`, `is_urgent`, `attachment_ids`,
+`tags`, `action_number`, or a different `correlation_id`, `reply_to` or
+`action_icon`) always sends a new ping. A 404 with no `code` from
+`replace()` means the server has not switched replacing on yet, and a
+`replaceKey` is stored and ignored until it does.
+
 > Security note: an agent credential is a bearer token. Keep it server-side. Do not embed a long-lived token in a browser bundle or a public client.
 
 ## Authentication
@@ -764,6 +806,10 @@ await sendIncomingWebhook(webhookUrl, {
 }, { idempotencyKey: 'build-42' });
 ```
 
+Pass `replaceKey` to keep updating one ping from a webhook instead of adding a
+new one each time; see [Replacing a ping](#replacing-a-ping). The result then
+carries `replaced: true` when it replaced the webhook's earlier ping.
+
 ### Live Activities from a webhook
 
 See [Live Activities](#live-activities) below for the full picture. From a webhook, put `live_status` at the **top level** of the payload:
@@ -1048,9 +1094,10 @@ surface, so you can branch exhaustively:
 | `RoomScopedErrorCode` / `ROOM_SCOPED_ERROR_CODES` | every call whose path names a room (`rooms.get`, `actions.*`, `broadcast`, `webhooks.*`, `live.*`) |
 | `AgentInboxErrorCode` / `AGENT_INBOX_ERROR_CODES` | `inbox.ensure()` / `inbox.activate()` |
 | `QuickActionErrorCode` / `QUICK_ACTION_ERROR_CODES` | `actions.*` and a `broadcast()` naming an `action_number`: `quick_action_input_required`, `quick_action_input_type`, `action_not_configured`, `pro_required`, `quick_action_layout_changed`, `quick_action_page_in_use`; and, on `actions.trigger()` with `trigger_source: 'location'` only, `location_trigger_owner_only` (403) and `location_trigger_inactive` (409) |
+| `ReplaceErrorCode` / `REPLACE_ERROR_CODES` | `notifications.replace()`: `notification_not_found` (404), `not_ping_owner` (403), `unsupported_room`, `unsupported_question`, `unsupported_handoff`, `unsupported_live_status`, `unsupported_claim`, `unsupported_ack`, `unsupported_checklist`, `unsupported_source` (422), `replace_window_closed` and `replace_limit_reached` (409) |
 | `CommonErrorCode` / `COMMON_ERROR_CODES` | any call: `rate_limited` (429, a route throttle; carries `retryAfter`) and `feature_disabled` (403, the operator switched the capability off; `error.body.feature` names the switch, for example `sending.attachments`, and retrying cannot succeed) |
 | `RequestLimitErrorCode` / `REQUEST_LIMIT_ERROR_CODES` | `payload_too_large` (HTTP 413 from the server on any oversized body) and `attachment_too_large` (raised locally by `attachments.upload()` above 5 MiB, before any bytes travel) |
-| `AgentErrorCode` | all six, for one shared branch |
+| `AgentErrorCode` | all of them, for one shared branch |
 
 ## Configuration
 

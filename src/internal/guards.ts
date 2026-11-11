@@ -133,6 +133,30 @@ export function assertTag(tag: unknown, field = 'tag'): void {
   assertTagText(normalizeTag(tag), field);
 }
 
+/** Mirrors `App\Support\PingReplacement`: a `replace_key` is 1–64 characters of letters, digits and `. _ : -`. */
+export const MAX_REPLACE_KEY_LENGTH = 64;
+export const REPLACE_KEY_PATTERN = /^[A-Za-z0-9._:-]+$/;
+
+/**
+ * Check a `replaceKey` the way the server does. The key is sent as given (the
+ * server does not trim it), so a key with a space or any other character
+ * outside the set is refused here rather than as a 422.
+ */
+export function assertReplaceKey(value: unknown, field = 'replaceKey'): void {
+  if (value === undefined) {
+    return;
+  }
+  if (typeof value !== 'string') {
+    throw new PingRoomError(`\`${field}\` must be a string.`, { code: 'invalid_request' });
+  }
+  if (value.length < 1 || value.length > MAX_REPLACE_KEY_LENGTH || !REPLACE_KEY_PATTERN.test(value)) {
+    throw new PingRoomError(
+      `\`${field}\` must be 1–${MAX_REPLACE_KEY_LENGTH} characters: letters, digits, ".", "_", ":" and "-".`,
+      { code: 'invalid_request' },
+    );
+  }
+}
+
 export function assertActionNumber(n: unknown): void {
   if (n === undefined || n === null) {
     return;
