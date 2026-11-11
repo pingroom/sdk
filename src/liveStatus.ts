@@ -146,6 +146,8 @@ export interface LiveClaim {
   realerted_at?: number;
   ended_by?: string;
   released_by?: string;
+  /** The last claimer the asker was alerted about: a take alerts the asker once per claimer. */
+  claimer_alerted_id?: string;
 }
 
 /**
