@@ -7,6 +7,7 @@ import {
   normalizeIdempotencyKey,
   requireNonEmpty,
 } from '../internal/guards.js';
+import { refusePingActionsData } from '../internal/pingActions.js';
 import { pollUntilSettled } from '../internal/retry.js';
 import type {
   AskInput,
@@ -67,6 +68,7 @@ export class HandoffsApi {
   requestAck(input: RequestAckInput): Promise<Handoff> {
     requireNonEmpty(input.prompt, 'prompt');
     assertStructuredData(input.data);
+    refusePingActionsData(input.data, 'A handoff');
     return this.create('ack', input);
   }
 
@@ -77,6 +79,7 @@ export class HandoffsApi {
   ask(input: AskInput): Promise<Handoff> {
     requireNonEmpty(input.prompt, 'prompt');
     assertStructuredData(input.data);
+    refusePingActionsData(input.data, 'A handoff');
     if (!Array.isArray(input.options) || input.options.length < 2 || input.options.length > 4) {
       throw new PingRoomError('`options` must contain between 2 and 4 entries for a question handoff.', {
         code: 'invalid_request',

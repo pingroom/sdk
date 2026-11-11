@@ -3,6 +3,7 @@
 import { PingRoomError } from '../errors.js';
 import type { HttpClient } from '../http.js';
 import { assertStructuredData, assertTags, requireNonEmpty } from '../internal/guards.js';
+import { refusePingActionsData } from '../internal/pingActions.js';
 import type {
   LiveClaimAction,
   LiveClaimResult,
@@ -67,6 +68,7 @@ export class LiveApi {
     requireNonEmpty(inviteCode, 'inviteCode');
     requireNonEmpty(ping.correlation_id, 'correlation_id');
     assertStructuredData(ping.data);
+    refusePingActionsData(ping.data, 'A live-progress stream');
     assertTags(ping.tags);
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/live`, { body: ping });
   }

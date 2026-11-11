@@ -25,6 +25,7 @@ export {
   HANDOFF_ERROR_CODES,
   LIVE_CLAIM_ERROR_CODES,
   METRIC_ERROR_CODES,
+  PING_ACTION_ERROR_CODES,
   REPLACE_ERROR_CODES,
   ROOM_SCOPED_ERROR_CODES,
   QUICK_ACTION_ERROR_CODES,
@@ -40,6 +41,7 @@ export type {
   HandoffErrorCode,
   LiveClaimErrorCode,
   MetricErrorCode,
+  PingActionErrorCode,
   PingRoomErrorInit,
   QuickActionErrorCode,
   ReplaceErrorCode,
@@ -68,6 +70,20 @@ export type {
 
 export { linkPing } from './linkPing.js';
 export type { LinkPingInput, LinkPingData } from './linkPing.js';
+
+export { pingAction } from './pingAction.js';
+export type { PingActionOptions, WebhookPingActionOptions } from './pingAction.js';
+export {
+  MAX_PING_ACTIONS,
+  MAX_PING_ACTION_LABEL_LENGTH,
+  MAX_PING_ACTION_URL_LENGTH,
+  MAX_PING_ACTION_BODY_BYTES,
+  MAX_PING_ACTION_BODY_KEYS,
+  PING_ACTION_ID_PATTERN,
+  PING_ACTION_RUN_WINDOW_HOURS,
+  PING_ACTION_STYLES,
+  PING_ACTION_TYPES,
+} from './internal/pingActions.js';
 
 export { locationPing, extractLocationPing } from './locationPing.js';
 export type {

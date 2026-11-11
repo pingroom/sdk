@@ -157,6 +157,9 @@ export const REPLACE_ERROR_CODES = [
   'unsupported_ack',
   'unsupported_checklist',
   'unsupported_source',
+  // 422 — a Ping with buttons (`data.actions`): its buttons, and the text
+  // around them, stay exactly as sent.
+  'unsupported_actions',
   // 409 — the Ping is 24 hours old or older.
   'replace_window_closed',
   // 409 — the Ping has already been replaced 20 times.
@@ -262,6 +265,30 @@ export type WithdrawErrorCode = (typeof WITHDRAW_ERROR_CODES)[number];
 /** @see METRIC_ERROR_CODES */
 export type MetricErrorCode = (typeof METRIC_ERROR_CODES)[number];
 
+/**
+ * The coded refusals of a send that carries buttons (`data.actions`) on
+ * `broadcast()` or `sendIncomingWebhook()`. A button the rules refuse (a
+ * label, a URL, a body) is a 422 validation error on its field instead, and
+ * the operator switch being off is `feature_disabled`.
+ *
+ * Server: `App\Support\PingActionRules`.
+ */
+export const PING_ACTION_ERROR_CODES = [
+  // 422 — a person's own send (the app, the web app, a user JWT). Only an
+  // agent credential or an incoming webhook may attach buttons.
+  'ping_buttons_agents_only',
+  // 422 — a public room or a personal room.
+  'ping_buttons_unsupported_room',
+  // 422 — together with `requires_ack` (the confirmation owns the
+  // notification's buttons).
+  'ping_buttons_with_ack',
+  // 403 — a `webhook` button while the room owner is not on Pro.
+  'ping_buttons_require_pro',
+] as const;
+
+/** @see PING_ACTION_ERROR_CODES */
+export type PingActionErrorCode = (typeof PING_ACTION_ERROR_CODES)[number];
+
 /** @see HANDOFF_ERROR_CODES */
 export type HandoffErrorCode = (typeof HANDOFF_ERROR_CODES)[number];
 
@@ -281,6 +308,7 @@ export type AgentErrorCode =
   | ReplaceErrorCode
   | WithdrawErrorCode
   | MetricErrorCode
+  | PingActionErrorCode
   | RequestLimitErrorCode
   | CommonErrorCode;
 

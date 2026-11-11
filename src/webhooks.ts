@@ -26,10 +26,11 @@ import {
   normalizeIdempotencyKey,
 } from './internal/guards.js';
 import { assertMetricFields, normalizeMetricKey } from './internal/metrics.js';
+import { assertPingActionsData, refusePingActionsData } from './internal/pingActions.js';
 import { assertSecureUrl, redactUrlInMessage, refuseRedirect } from './internal/url.js';
 import { invalidSuccessResponse, isRecord } from './internal/validate.js';
 import type { LiveStatus } from './liveStatus.js';
-import type { AckMode, ActionState, FetchLike, JsonObject, RoomMetric, SetMetricInput } from './types.js';
+import type { AckMode, ActionState, FetchLike, JsonObject, PingAction, RoomMetric, SetMetricInput } from './types.js';
 import { VERSION } from './version.js';
 
 export const WEBHOOK_SIGNATURE_HEADER = 'X-PingRoom-Signature';
@@ -135,6 +136,10 @@ export interface IncomingWebhookPayload {
   color?: string;
   /** Per-ping sound override — a canonical sound id (see constants/sounds.json). */
   sound?: string;
+  /**
+   * Structured data (≤ 25 keys / 8KB). Reserved `actions` holds up to 3
+   * buttons (see `pingAction`); not with `live_status`.
+   */
   data?: JsonObject;
   correlation_id?: string;
   reply_to?: string;
@@ -231,6 +236,13 @@ export interface IncomingWebhookResult {
   metric?: RoomMetric;
   /** `true` when a `metric` write repeated the stored value and changed nothing. */
   unchanged?: boolean;
+  /** The Ping's buttons as every recipient sees them, when the body carried `data.actions`. */
+  actions?: PingAction[];
+  /**
+   * The secret every delivery of this Ping's `webhook` buttons is signed with;
+   * only when one of its buttons is a `webhook`. Keep it to verify deliveries.
+   */
+  action_signing_secret?: string;
   [key: string]: unknown;
 }
 
@@ -285,6 +297,13 @@ export async function sendIncomingWebhook(
   assertMaxLength(payload.title, MAX_PING_TITLE_LENGTH, 'title');
   assertActionNumber(payload.action);
   assertStructuredData(payload.data);
+  // Buttons ride an ordinary webhook Ping; a `live_status` body is a stream,
+  // whose Ping never carries them (the server answers 422).
+  if (payload.live_status !== undefined) {
+    refusePingActionsData(payload.data, 'A live-progress stream');
+  } else {
+    assertPingActionsData(payload.data);
+  }
   assertTags(payload.tags);
   assertReplaceKey(payload.replaceKey);
   assertWebhookMetric(payload);

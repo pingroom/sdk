@@ -2,6 +2,7 @@
 
 import type { HttpClient } from '../http.js';
 import { assertStructuredData, requireNonEmpty } from '../internal/guards.js';
+import { refusePingActionsData } from '../internal/pingActions.js';
 import { pollUntilSettled } from '../internal/retry.js';
 import type {
   Approval,
@@ -57,6 +58,7 @@ export class ApprovalsApi {
   request(inviteCode: string, input: ApprovalInput): Promise<Approval> {
     requireNonEmpty(input.question, 'question');
     assertStructuredData(input.data);
+    refusePingActionsData(input.data, 'An approval');
     const { body, headers } = splitIdempotencyKey(input);
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/approvals`, {
       body: dropUndefined({ ...body }),

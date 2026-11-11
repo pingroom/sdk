@@ -89,6 +89,7 @@ test('every replace refusal surfaces its status and code on the error', async ()
     [422, 'unsupported_ack'],
     [422, 'unsupported_checklist'],
     [422, 'unsupported_source'],
+    [422, 'unsupported_actions'],
     [409, 'replace_window_closed'],
     [409, 'replace_limit_reached'],
     [409, 'ping_withdrawn'],

@@ -13,6 +13,7 @@ import {
   normalizeIdempotencyKey,
   requireNonEmpty,
 } from './guards.js';
+import { assertPingActionsData, refusePingActionsData } from './pingActions.js';
 import type { PingInput, ReplacePingInput } from '../types.js';
 
 /** Extra wall-clock allowance over the server's hold window for long-poll calls. */
@@ -92,6 +93,7 @@ export function assertPing(ping: PingInput): void {
   assertMaxLength(ping.title, MAX_PING_TITLE_LENGTH, 'title');
   assertActionNumber(ping.action_number);
   assertStructuredData(ping.data);
+  assertPingActionsData(ping.data);
   assertTags(ping.tags);
   assertReplaceKey(ping.replaceKey);
 }
@@ -105,6 +107,9 @@ export function assertReplacePing(ping: ReplacePingInput): void {
   assertMaxLength(ping.message, MAX_PUBLIC_PING_MESSAGE_LENGTH, 'message');
   assertMaxLength(ping.title, MAX_PING_TITLE_LENGTH, 'title');
   assertStructuredData(ping.data);
+  // A replacement never adds, changes or removes buttons (the server answers
+  // 422 on `data.actions`), and a Ping that has buttons cannot be replaced.
+  refusePingActionsData(ping.data, 'A replacement');
 }
 
 export function waitTimeoutMs(seconds: number | undefined): number {

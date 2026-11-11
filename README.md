@@ -118,6 +118,126 @@ legacy or malformed data. (This is a point carried in a ping's `data`, not the
 geofence source `trigger_source: 'location'` described under
 [Rooms & quick actions](#rooms--quick-actions).)
 
+### Buttons on a ping
+
+A ping can carry up to three buttons, shown on the notification's long-press
+actions and on the ping's card in the app. They live under the reserved
+`data.actions` key of `broadcast()` (an agent credential) or
+`sendIncomingWebhook()`; `pingAction` builds and checks each one:
+
+```ts
+import { PingRoom, pingAction } from '@pingroom/sdk';
+
+const ping = await pr.broadcast('ab12cd', {
+  message: 'Disk 91% on db-2',
+  data: {
+    actions: [
+      pingAction.openUrl('Open dashboard', 'https://grafana.example.com/d/disk'),
+      pingAction.webhook('Clean up now', 'https://ops.example.com/cleanup', {
+        id: 'clean',
+        style: 'danger',
+        body: { host: 'db-2' },
+      }),
+    ],
+  },
+});
+
+// Store it: every tap on "Clean up now" is signed with this secret.
+await secrets.put(ping.id, ping.action_signing_secret);
+```
+
+- `openUrl` opens an https page. The app shows the link's host under the label
+  and opens it in the in-app browser. The URL never rides the push: a tap on
+  the notification loads the ping from the API first.
+- `webhook` never makes the phone call your URL. A tap calls PingRoom, which
+  POSTs a signed `notification.action` event to your URL. Each person can run a
+  button once (a second tap does nothing), for 24 hours after the ping was
+  sent. The URL and `body` are never shown to anyone. The room owner must be on
+  PingRoom Pro.
+
+The rules, checked here before any request and again by the server:
+
+| | |
+|---|---|
+| Count | 1 to 3 buttons. `id` is `[a-z0-9_-]{1,24}`, unique on the ping; it defaults to `a1`, `a2`, `a3` by position. `style` is `default`, `primary` or `danger`. |
+| Label | 1 to 26 characters after cleaning (Unicode NFC, runs of spaces collapsed, trimmed). No line breaks, control, private-use or invisible formatting characters (bidirectional overrides and isolates, zero-width spaces). Nothing shaped like a web address, domain name or IP address (`paypal.com`, `www.x`, `10.0.0.5`, `https://…`): the host line under the button is the only place a person learns where it goes. Never one of PingRoom's own buttons (Pong back, Mute room, Confirm, the claim buttons) in any language the app ships. |
+| URL | `https://` only, at most 2048 characters, printable ASCII (percent-encode the rest). A plain public hostname: no user name or password, no IP address, no `localhost` or internal name such as `.internal` or `.local`. An internationalized domain must be given as punycode (`xn--…`), and is shown that way, so a look-alike letter cannot pass for a real domain. A `webhook` URL takes no port. |
+| Body | `webhook` only: a JSON object of at most 10 keys and 1024 bytes (measured as PHP's escaped JSON, like `data`'s 8 KB). |
+| Where | Not in a public or personal room, not with `requires_ack`. A question, handoff, approval, live stream, quick-action press or `notifications.replace()` never carries buttons, and a ping with buttons cannot be replaced (`unsupported_actions`). |
+
+A refusal the SDK can see is a `PingRoomError` with `code: 'invalid_data'`
+naming every field (`data.actions.0.label: …`). The server's own refusals are
+in `PING_ACTION_ERROR_CODES`: `ping_buttons_unsupported_room`,
+`ping_buttons_with_ack` (422), `ping_buttons_require_pro` (403), and
+`feature_disabled` when the operator has buttons switched off.
+
+Reads of the ping (`notifications.list()`, `listen()`, `getNotification()`)
+carry `actions` (each button's `id`, `label`, `type`, `style`, plus `url` and
+`host` for a link; a webhook button never shows where it goes),
+`actions_expire_at`, and `action_runs` (the reading person's own taps). The
+stored `data` never holds `actions`.
+
+#### Verifying a button's delivery
+
+The event your URL receives is signed exactly like an outgoing webhook
+([Verifying outgoing webhooks](#verifying-outgoing-webhooks)), with the ping's
+own `action_signing_secret` as the secret. Headers: `X-PingRoom-Event:
+notification.action`, `X-PingRoom-Signature-V2`, `X-PingRoom-Signature`,
+`X-PingRoom-Timestamp`, `X-PingRoom-Delivery`, `Content-Type:
+application/json`, `User-Agent: PingRoom-Webhook/1.0`. Body:
+
+```json
+{
+  "event": "notification.action",
+  "notification_id": "…",
+  "action_id": "clean",
+  "room": { "code": "AB12CD", "name": "Ops" },
+  "actor": { "id": "3f2a…(32 hex)", "display_name": "Sam" },
+  "correlation_id": null,
+  "body": { "host": "db-2" },
+  "timestamp": "2026-11-11T10:00:00+00:00"
+}
+```
+
+`actor.id` is a pseudonym, stable for that person in that room and different
+in every other room; with `display_name` it is all your server learns about
+who tapped (never their PingRoom id, email, handle or device).
+
+Each ping has its own secret, so look it up by `notification_id`, which is
+only a lookup key until the signature checks out:
+
+```ts
+app.post('/cleanup', express.raw({ type: 'application/json' }), async (req, res) => {
+  let id;
+  try {
+    id = JSON.parse(req.body.toString('utf8')).notification_id;
+  } catch {
+    return res.status(400).end();
+  }
+  const secret = typeof id === 'string' ? await secrets.get(id) : undefined;
+  if (!secret) return res.status(401).end();
+
+  const ok = await verifyWebhookSignature({
+    payload: req.body,                       // the RAW bytes
+    signatureV2: req.get(WEBHOOK_SIGNATURE_V2_HEADER),
+    timestamp: req.get(WEBHOOK_TIMESTAMP_HEADER),
+    deliveryId: req.get(WEBHOOK_DELIVERY_HEADER),
+    secret,
+    requireV2: true,                         // refuses stale (> 5 min) and v1-only requests
+  });
+  if (!ok) return res.status(401).end();
+
+  // Delivered at least once: run each X-PingRoom-Delivery only once.
+  if (await seen(req.get(WEBHOOK_DELIVERY_HEADER))) return res.status(204).end();
+  const event = JSON.parse(req.body.toString('utf8'));
+  // ... event.action_id === 'clean', event.body.host === 'db-2'
+  res.status(204).end();
+});
+```
+
+A delivery is retried a few times on a 429, a 5xx or no answer; answer 2xx once
+you have it.
+
 ### Tags
 
 Label a ping with up to 10 `tags` and filter history by one later. A tag is 1 to

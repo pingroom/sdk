@@ -4,6 +4,72 @@ import type { Question } from './questions.js';
 
 // --- pings / notifications ------------------------------------------------
 
+/** What a button does when tapped: open an https link, or tell your server. */
+export type PingActionType = 'open_url' | 'webhook';
+
+/** `danger` draws a destructive-looking button. */
+export type PingActionStyle = 'default' | 'primary' | 'danger';
+
+/**
+ * One button as you send it, in `data.actions` (at most 3). Build it with
+ * `pingAction.openUrl()` / `pingAction.webhook()`.
+ */
+export interface PingActionInput {
+  /** `[a-z0-9_-]{1,24}`, unique on the Ping. Defaults to `a1`, `a2`, `a3` by position. */
+  id?: string;
+  /**
+   * 1–26 characters after cleaning. No line breaks, control or invisible
+   * formatting characters, nothing shaped like a web address, domain or IP
+   * address, and not one of PingRoom's own buttons (Pong back, Mute room,
+   * Confirm, the claim buttons) in any language.
+   */
+  label: string;
+  type: PingActionType;
+  /**
+   * https only, printable ASCII, a public hostname (punycode for an
+   * internationalized one), no user name or password, at most 2048
+   * characters. A `webhook` URL takes no port.
+   */
+  url: string;
+  style?: PingActionStyle;
+  /** `webhook` only: a JSON object (≤ 10 keys, ≤ 1024 bytes) echoed to your URL as `body` on every tap. */
+  body?: Record<string, unknown>;
+}
+
+/**
+ * A button as every reader of the Ping sees it. An `open_url` button carries
+ * its link and the host the server derived from it; a `webhook` button never
+ * says where it goes.
+ */
+export interface PingAction {
+  id: string;
+  label: string;
+  type: PingActionType;
+  style: PingActionStyle;
+  /** `open_url` only. */
+  url?: string;
+  /** `open_url` only: the host the app shows under the label. */
+  host?: string;
+}
+
+/** One of the reading person's own taps on a `webhook` button. */
+export interface PingActionRun {
+  action_id: string;
+  /** `queued` until delivered; `failed` or `skipped` when the delivery did not happen. */
+  status: 'queued' | 'delivered' | 'failed' | 'skipped' | (string & {});
+  ran_at: string | null;
+}
+
+/** The button fields every Ping read carries, present only on a Ping that has buttons. */
+export interface PingActionFields {
+  /** The sender's buttons, in order. Absent on a Ping without buttons and on older servers. */
+  actions?: PingAction[];
+  /** When the buttons stop running (24 hours after the Ping was sent). */
+  actions_expire_at?: string;
+  /** The reading person's own runs of the `webhook` buttons; `[]` when none. */
+  action_runs?: PingActionRun[];
+}
+
 /** A visible Ping — used for broadcasts and the retired direct-ping compatibility method. */
 export interface PingInput {
   /** Visible body (≤ 120 characters in private rooms; ≤ 160 in public rooms). */
@@ -17,6 +83,8 @@ export interface PingInput {
    * Reserved keys `url` + `button_label` make the ping a tappable link —
    * see the `linkPing()` helper. Reserved `location` carries finite numeric
    * latitude/longitude plus an optional label/address — see `locationPing()`.
+   * Reserved `actions` holds up to 3 buttons — see `pingAction`; the result
+   * then carries `action_signing_secret` when one is a `webhook` button.
    */
   data?: JsonObject;
   correlation_id?: string;
@@ -98,7 +166,8 @@ export interface ReplacePingInput {
   title?: string | null;
   /**
    * The new structured data, replacing the old (same rules as a send's, minus
-   * `data.checklist`). Omit to keep the current data; `null` clears it.
+   * `data.checklist` and `data.actions`: a replacement never adds, changes or
+   * removes buttons). Omit to keep the current data; `null` clears it.
    */
   data?: JsonObject | null;
 }
@@ -274,7 +343,7 @@ export type ConfirmationReach =
   | { checked: true; unavailable_user_ids: string[]; unavailable_count: number }
   | { checked: false };
 
-export interface PingResult {
+export interface PingResult extends PingActionFields {
   id: string;
   message: string;
   action_number: number | null;
@@ -309,6 +378,13 @@ export interface PingResult {
   recipient_count?: number;
   muted_count?: number;
   confirmation_reach?: ConfirmationReach;
+  /**
+   * The secret every delivery of this Ping's `webhook` buttons is signed with
+   * (`X-PingRoom-Signature-V2`; check it with `verifyWebhookSignature`). Only on
+   * the send result (a keyed retry of it included), only when the Ping has a
+   * `webhook` button, never on any read: keep it.
+   */
+  action_signing_secret?: string;
   [key: string]: unknown;
 }
 
@@ -319,7 +395,7 @@ export interface PingResult {
  * from `AgentNotification` — otherwise every named field would widen to
  * `unknown`.
  */
-interface AgentNotificationFields {
+interface AgentNotificationFields extends PingActionFields {
   id: string;
   message: string;
   action_number: number | null;

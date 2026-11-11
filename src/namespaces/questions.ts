@@ -3,6 +3,7 @@
 import { PingRoomError } from '../errors.js';
 import type { HttpClient } from '../http.js';
 import { assertStructuredData, requireNonEmpty } from '../internal/guards.js';
+import { refusePingActionsData } from '../internal/pingActions.js';
 import { pollUntilSettled } from '../internal/retry.js';
 import type {
   ListQuestionsInput,
@@ -48,6 +49,7 @@ export class QuestionsApi {
   ask(inviteCode: string, input: QuestionInput): Promise<Question> {
     requireNonEmpty(input.prompt, 'prompt');
     assertStructuredData(input.data);
+    refusePingActionsData(input.data, 'A Question');
     assertPollShape(input);
     const { body, headers } = splitIdempotencyKey(input);
     return this.http.request('POST', `/api/agent/rooms/${enc(inviteCode)}/questions`, {
