@@ -22,17 +22,57 @@
  * `live_status` legs. See https://pingroom.io/liveactivities.md.
  */
 
-export type LiveActivityTemplate =
-  | 'status'
-  | 'steps'
-  | 'progress'
-  | 'metrics'
-  | 'countdown'
-  | 'question'
-  | 'matchup'
-  | 'claim';
+/**
+ * Every `live_status.template` the server accepts, in the frozen wire order
+ * (pinned to `docs/contracts/live-templates.json` by test/live-templates-contract.test.mjs).
+ * An app that does not know one shows the `status` layout (title and message), so
+ * a template added later never leaves a card blank.
+ */
+export const LIVE_TEMPLATES = [
+  'status',
+  'steps',
+  'progress',
+  'metrics',
+  'countdown',
+  'question',
+  'matchup',
+  'claim',
+  'timer',
+  'value',
+  'stats',
+] as const;
+
+export type LiveActivityTemplate = (typeof LIVE_TEMPLATES)[number];
+
+/**
+ * The server's limits on the fields the `timer`, `value`, `stats` and segmented
+ * `progress` layouts added. The SDK does not enforce them (the server answers
+ * 422 with the rule it broke); they are here for a caller that wants to check
+ * before sending, and are pinned to the server by test/live-templates-contract.test.mjs.
+ * Lengths are in characters, as Laravel counts them.
+ */
+export const LIVE_STATUS_LIMITS = {
+  /** `value`: the `value` string. */
+  valueLength: 24,
+  /** `value`: the `value_label` string. */
+  valueLabelLength: 24,
+  /** `value`: the `delta` string. */
+  deltaLength: 12,
+  /** `stats`: fewest and most `{label, value}` pairs. */
+  statsMin: 4,
+  statsMax: 8,
+  /** `stats`: each pair's `label` and `value`. */
+  statLabelLength: 24,
+  statValueLength: 24,
+  /** `progress`: `segments` is 2 to 20; `current_segment` is 0 to `segments`. */
+  segmentsMin: 2,
+  segmentsMax: 20,
+} as const;
 
 export type LiveStatusState = 'running' | 'done' | 'failed';
+
+/** Which way a `value` card's `delta` moved. Neutral: `up` is not good or bad. */
+export type LiveStatusTrend = 'up' | 'down' | 'flat';
 
 /** Legacy rendering category. Prefer `template`; `alert` selects urgent styling. */
 export type LiveStatusCategory = 'status' | 'steps' | 'alert';
@@ -60,7 +100,9 @@ export interface LiveStatusSide {
  * `template` and `steps` are fixed at stream creation — a later ping cannot
  * re-template a running card, and a `running` ping whose `steps` list differs
  * from the stored one is rejected with 422 `steps_immutable` (an identical list,
- * or none, is fine; a `done`/`failed` ping ignores it and still ends). Content set at creation is sticky, so a sparse
+ * or none, is fine; a `done`/`failed` ping ignores it and still ends). `segments`
+ * (`progress`) and `started_at` (`timer`) are fixed the same way, with
+ * `segments_immutable` and `started_at_immutable`. Content set at creation is sticky, so a sparse
  * update carrying just `progress` keeps rendering the full template. The
  * terminal leg is sticky too: `{ state: 'done' }` alone keeps the scoreboard,
  * metrics grid, deadline and accent on the final frame.
@@ -96,6 +138,43 @@ export interface LiveStatus {
    * later ping moves the stored duration by the same amount.
    */
   duration_seconds?: number;
+  /**
+   * `progress` only: draw the bar in this many equal segments (2–20). Immutable
+   * once set: a different value on a `running` ping is rejected with 422
+   * `segments_immutable` (a `done`/`failed` ping ignores it).
+   */
+  segments?: number;
+  /**
+   * `progress` only: how many segments are complete, 0..`segments`. More than
+   * `segments`, or sent with no `segments`, is 422 `invalid_current_segment`.
+   * When you omit `progress`, the server derives it as `current_segment /
+   * segments`; a `done` ping completes every segment.
+   */
+  current_segment?: number;
+  /**
+   * `timer` only: epoch seconds the card counts up from. Defaults to the first
+   * ping's time when omitted; immutable after (422 `started_at_immutable` on a
+   * `running` ping with a different value; a `done`/`failed` ping ignores it).
+   * The device keeps the clock ticking, so no per-second pushes are needed, but
+   * send an update at least every 15 minutes or the stream is ended as stale. A
+   * finished timer freezes at its final elapsed time.
+   */
+  started_at?: number;
+  /** `value` only, required on the first ping: the one prominent value (max 24 characters). */
+  value?: string;
+  /** `value` only: what the value is (max 24 characters). */
+  value_label?: string;
+  /** `value` only: the change, such as `+3.2%` (max 12 characters). */
+  delta?: string;
+  /** `value` only: which way `delta` moved. */
+  trend?: LiveStatusTrend;
+  /**
+   * `stats` only, required on the first ping: 4 to 8 labelled values, drawn as
+   * two rows of the `metrics` cells. Labels, values and the count may change
+   * between pings; a ping that omits `stats` keeps the stored list. (`metrics`
+   * is separate and still takes at most 3.)
+   */
+  stats?: LiveStatusMetric[];
   /** Epoch seconds; renders a live ETA on `status`/`progress`. */
   eta_at?: number;
   /** The ask, for the `question` template. */
@@ -234,7 +313,11 @@ export interface LiveStatusSnapshot {
   accent_override: string | null;
   eta_at: number | null;
   deadline_at: number | null;
-  /** Countdown length in seconds, following any `deadline_at` move; `null` on every other template. */
+  /**
+   * Countdown length in seconds, following any `deadline_at` move. On a finished
+   * `timer`, its final elapsed seconds. `null` on every other template (and on a
+   * running timer).
+   */
   duration_seconds: number | null;
   metrics: LiveStatusMetric[] | null;
   prompt: string | null;
@@ -244,6 +327,15 @@ export interface LiveStatusSnapshot {
   center: string | null;
   steps: string[] | null;
   current_step: number | null;
+  /** The layouts added later are optional here: a server that predates one omits its fields. */
+  segments?: number | null;
+  current_segment?: number | null;
+  started_at?: number | null;
+  value?: string | null;
+  value_label?: string | null;
+  delta?: string | null;
+  trend?: LiveStatusTrend | null;
+  stats?: LiveStatusMetric[] | null;
   action_state?: unknown;
   updated_at: string | null;
   /** `claim` template only: the request text. Absent on every other template. */
@@ -275,7 +367,11 @@ export const liveStatus = {
     return ping(correlationId, { template: 'steps', ...live }, rest);
   },
 
-  /** A determinate progress bar with an optional live ETA. */
+  /**
+   * A determinate progress bar with an optional live ETA. Set `segments` (2–20)
+   * and `current_segment` to draw it in equal segments; `progress` is then
+   * derived as `current_segment / segments` when you omit it.
+   */
   progress(correlationId: string, live: Omit<LiveStatus, 'template'>, rest?: Rest): LiveStatusPing {
     return ping(correlationId, { template: 'progress', ...live }, rest);
   },
@@ -298,6 +394,35 @@ export const liveStatus = {
   /** Two sides plus a center score/clock. */
   matchup(correlationId: string, live: Omit<LiveStatus, 'template'>, rest?: Rest): LiveStatusPing {
     return ping(correlationId, { template: 'matchup', ...live }, rest);
+  },
+
+  /**
+   * A timer counting UP from `started_at`, kept by the device so it needs no
+   * per-second pushes. `started_at` defaults to the first ping's time. A finished
+   * timer freezes at its final elapsed time. As with every stream, send an update
+   * at least every 15 minutes or it is ended as stale.
+   */
+  timer(correlationId: string, live: Omit<LiveStatus, 'template'>, rest?: Rest): LiveStatusPing {
+    return ping(correlationId, { template: 'timer', ...live }, rest);
+  },
+
+  /**
+   * One prominent value. `value` is required on the first ping; `value_label`,
+   * `delta` and `trend` are optional. When you send no `message` the server
+   * writes one ("Label Value (delta)") so an older app, which shows the status
+   * layout, still reads well.
+   */
+  value(correlationId: string, live: Omit<LiveStatus, 'template'>, rest?: Rest): LiveStatusPing {
+    return ping(correlationId, { template: 'value', ...live }, rest);
+  },
+
+  /**
+   * Four to eight labelled values (`live.stats`), required on the first ping. Use
+   * `metrics` for up to 3. When you send no `message` the server writes one
+   * ("Label Value · Label Value …") for older apps.
+   */
+  stats(correlationId: string, live: Omit<LiveStatus, 'template'>, rest?: Rest): LiveStatusPing {
+    return ping(correlationId, { template: 'stats', ...live }, rest);
   },
 
   /**

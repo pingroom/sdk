@@ -905,12 +905,17 @@ There is a third producer — a person driving a stream from the app composer ov
 |---|---|
 | `liveStatus.status` | Title, message, optional progress |
 | `liveStatus.steps` | Segmented tracker; `steps` (2–8 labels) required on the first ping and immutable after: later pings resend the identical list or omit it, and a different list on a `running` ping throws `PingRoomError` `steps_immutable` (422); a `done`/`failed` ping ignores it and still ends the stream |
-| `liveStatus.progress` | Determinate bar with optional `eta_at` |
+| `liveStatus.progress` | Determinate bar with optional `eta_at`. Add `segments` (2–20) and `current_segment` (0..`segments`) to draw it in equal segments; with `progress` omitted the server derives it as `current_segment / segments`. `segments` is immutable once set (`segments_immutable`, 422); `current_segment` above `segments`, or without it, is `invalid_current_segment` (422) |
 | `liveStatus.metrics` | Up to 3 `{label, value}` counters |
 | `liveStatus.countdown` | Large live timer to `deadline_at`. A later ping may move the deadline (send the absolute epoch); `duration_seconds` is read on the first ping only and moves by the same amount as the deadline |
 | `liveStatus.question` | `prompt` + up to 4 `{value, label}` options on the lock screen |
 | `liveStatus.matchup` | `left` / `center` / `right` — a score or A-vs-B |
 | `liveStatus.claim` | "Who's on it?": a request one room member takes on. See [Who's on it?](#whos-on-it) |
+| `liveStatus.timer` | A clock counting **up** from `started_at` (epoch seconds; defaults to the first ping's time and is immutable after: `started_at_immutable`, 422). The device keeps it ticking, so no per-second pushes, but send an update at least every 15 minutes or the stream is ended as stale. A finished timer freezes at its final elapsed time, which `get()` returns as `duration_seconds` |
+| `liveStatus.value` | One prominent `value` (required on the first ping, max 24 characters) with an optional `value_label` (24), `delta` (12) and `trend` (`'up' \| 'down' \| 'flat'`) |
+| `liveStatus.stats` | 4 to 8 `{label, value}` pairs (24 characters each) in `stats`, required on the first ping, drawn as two rows of the `metrics` cells. Labels, values and the count may change between pings. (`metrics` still takes at most 3) |
+
+An app that predates a template shows the `status` layout: your title and message. For `value` and `stats` the server writes the message when you send none (`Label Value (delta)`, or `Label Value · Label Value …` clipped to 256 characters), so an older app still reads well; the current app draws the values themselves and does not show `message` on those two. `timer` never gets a written message. `LIVE_TEMPLATES` lists every template, and `LIVE_STATUS_LIMITS` holds the new field limits, for a caller that wants to check before sending (the SDK does not, and the server answers 422).
 
 ```ts
 await pr.live.push('AB12CD', liveStatus.steps('release-7', {
@@ -926,6 +931,37 @@ await pr.live.push('AB12CD', liveStatus.matchup('game-3', {
   right: { label: 'CHE', value: '1' },
   center: "68'",
 }));
+
+// A clock counting up, kept by the phone.
+await pr.live.push('AB12CD', liveStatus.timer('build-9', {
+  state: 'running',
+  started_at: Math.floor(Date.now() / 1000),
+}, { title: 'Build' }));
+
+// One prominent value, then four to eight stats, then a segmented bar.
+await pr.live.push('AB12CD', liveStatus.value('mrr-1', {
+  state: 'running',
+  value: '$12.4k',
+  value_label: 'MRR',
+  delta: '+3.2%',
+  trend: 'up',
+}));
+
+await pr.live.push('AB12CD', liveStatus.stats('health-2', {
+  state: 'running',
+  stats: [
+    { label: 'RPS', value: '1.2k' },
+    { label: 'p99', value: '180ms' },
+    { label: '5xx', value: '0.1%' },
+    { label: 'CPU', value: '45%' },
+  ],
+}, { title: 'Prod health' }));
+
+await pr.live.push('AB12CD', liveStatus.progress('migrate-5', {
+  state: 'running',
+  segments: 5,
+  current_segment: 2,
+}, { title: 'Migration' }));
 ```
 
 ### Who's on it?
@@ -997,7 +1033,7 @@ const snap = await pr.live.get('AB12CD', 'deploy-42');
 if (snap) console.log(snap.template, snap.current_step, snap.updated_at);
 ```
 
-`get()` returns **every** stored field (`state`, `progress`, `message`, `category`, `template`, `agent_id`, `accent_override`, `eta_at`, `deadline_at`, `duration_seconds`, `metrics`, `prompt`, `options`, `left`, `right`, `center`, `steps`, `current_step`) plus `action_state` and `updated_at`. Fields you never set come back as `null`, not omitted. A claim request adds `title` and `claim`.
+`get()` returns **every** stored field (`state`, `progress`, `message`, `category`, `template`, `agent_id`, `accent_override`, `eta_at`, `deadline_at`, `duration_seconds`, `metrics`, `prompt`, `options`, `left`, `right`, `center`, `steps`, `current_step`, and for the newer layouts `started_at`, `value`, `value_label`, `delta`, `trend`, `stats`, `segments`, `current_segment`) plus `action_state` and `updated_at`. Fields you never set come back as `null`, not omitted. A finished `timer` reports its final elapsed seconds as `duration_seconds`. A claim request adds `title` and `claim`.
 
 ### Ownership and limits
 

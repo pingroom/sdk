@@ -74,12 +74,13 @@ export type {
   LocationPingData,
 } from './locationPing.js';
 
-export { liveStatus } from './liveStatus.js';
+export { liveStatus, LIVE_TEMPLATES, LIVE_STATUS_LIMITS } from './liveStatus.js';
 export type {
   LiveActivityTemplate,
   LiveStatus,
   LiveStatusState,
   LiveStatusCategory,
+  LiveStatusTrend,
   LiveStatusMetric,
   LiveStatusOption,
   LiveStatusSide,

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { liveStatus } from '../dist/index.js';
+import { LIVE_TEMPLATES, liveStatus } from '../dist/index.js';
 
 test('liveStatus builders stamp their template and pass content through', () => {
   assert.deepEqual(
@@ -45,9 +45,10 @@ test('liveStatus builders merge the rest of the ping body', () => {
 
 test('liveStatus covers every template the server validates', () => {
   // Kept in lockstep with App\Support\LiveStatusRules::rules()'s
-  // live_status.template enum — a builder missing here is a template no SDK
-  // caller can discover.
-  for (const template of ['status', 'steps', 'progress', 'metrics', 'countdown', 'question', 'matchup', 'claim']) {
+  // live_status.template enum (pinned to docs/contracts/live-templates.json by
+  // live-templates-contract.test.mjs) — a builder missing here is a template no
+  // SDK caller can discover.
+  for (const template of LIVE_TEMPLATES) {
     assert.equal(typeof liveStatus[template], 'function', `missing builder: ${template}`);
     assert.equal(liveStatus[template]('c', { state: 'running' }).live_status.template, template);
   }
@@ -69,4 +70,73 @@ test('liveStatus.claim stamps the claim template and carries the request in titl
 test('a webhook ends its own claim request with the ordinary terminal builders', () => {
   assert.deepEqual(liveStatus.done('milk-1').live_status, { state: 'done' });
   assert.deepEqual(liveStatus.failed('milk-1').live_status, { state: 'failed' });
+});
+
+test('liveStatus.timer counts up from started_at and passes it through', () => {
+  assert.deepEqual(
+    liveStatus.timer('build-9', { state: 'running', started_at: 1794146700, message: 'Compiling' }, { title: 'Build' }),
+    {
+      correlation_id: 'build-9',
+      title: 'Build',
+      live_status: { template: 'timer', state: 'running', started_at: 1794146700, message: 'Compiling' },
+    },
+  );
+  // started_at is optional: the server defaults it to the first ping's time.
+  assert.equal('started_at' in liveStatus.timer('build-9', { state: 'running' }).live_status, false);
+});
+
+test('liveStatus.value carries the value, its label, delta and trend', () => {
+  assert.deepEqual(
+    liveStatus.value('mrr-1', {
+      state: 'running',
+      value: '$12.4k',
+      value_label: 'MRR',
+      delta: '+3.2%',
+      trend: 'up',
+    }).live_status,
+    { template: 'value', state: 'running', value: '$12.4k', value_label: 'MRR', delta: '+3.2%', trend: 'up' },
+  );
+});
+
+test('liveStatus.stats carries 4 to 8 pairs untouched', () => {
+  const stats = [
+    { label: 'RPS', value: '1.2k' },
+    { label: 'p99', value: '180ms' },
+    { label: '5xx', value: '0.1%' },
+    { label: 'CPU', value: '45%' },
+  ];
+  const ping = liveStatus.stats('health-2', { state: 'running', stats });
+  assert.equal(ping.live_status.template, 'stats');
+  assert.deepEqual(ping.live_status.stats, stats);
+});
+
+test('the builders do not enforce the server limits: an over-long value goes out and the server answers 422', () => {
+  // The SDK checks nothing on a live_status body beyond what push() guards
+  // (data, tags). The limits are exported for callers that want to check first.
+  const value = 'x'.repeat(25);
+  assert.equal(liveStatus.value('v', { state: 'running', value }).live_status.value, value);
+  assert.equal(liveStatus.stats('s', { state: 'running', stats: [] }).live_status.stats.length, 0);
+});
+
+test('liveStatus.progress draws in segments when asked to', () => {
+  assert.deepEqual(
+    liveStatus.progress('rel-2', { state: 'running', segments: 5, current_segment: 2 }).live_status,
+    { template: 'progress', state: 'running', segments: 5, current_segment: 2 },
+  );
+});
+
+test('the new layouts reach the wire through live.push()', async () => {
+  const { PingRoom } = await import('../dist/index.js');
+  let seen;
+  const fetchMock = async (url, init) => {
+    seen = { path: new URL(url).pathname, body: JSON.parse(init.body) };
+    return new Response(
+      JSON.stringify({ notification_id: 'n1', correlation_id: 'c', state: 'started', idempotent: false }),
+      { status: 201 },
+    );
+  };
+  const pr = new PingRoom({ token: 't', fetch: fetchMock });
+  await pr.live.push('AB12CD', liveStatus.timer('c', { state: 'running', started_at: 1794146700 }));
+  assert.equal(seen.path, '/api/agent/rooms/AB12CD/live');
+  assert.deepEqual(seen.body.live_status, { template: 'timer', state: 'running', started_at: 1794146700 });
 });
