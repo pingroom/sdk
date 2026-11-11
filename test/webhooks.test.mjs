@@ -251,6 +251,7 @@ const SERVER_WEBHOOK_FIELDS = [
   'ack_mode',
   'ack_timeout_seconds',
   'live_status',
+  'metric',
 ];
 
 // `replace_key` is the one server field the SDK takes under another name
@@ -259,6 +260,9 @@ test('the incoming-webhook allowlist matches the server contract exactly', () =>
   assert.deepEqual([...INCOMING_WEBHOOK_FIELDS], SERVER_WEBHOOK_FIELDS);
 });
 
+// `live_status` and `metric` are different things to do with one request, so the
+// server refuses a body that carries both (metrics.test.mjs). Each is exercised in
+// its own body here; together they cover every field.
 test('sendIncomingWebhook forwards every field the server accepts', async () => {
   const payload = {
     title: 'Build 512',
@@ -278,18 +282,25 @@ test('sendIncomingWebhook forwards every field the server accepts', async () => 
     ack_timeout_seconds: 300,
     live_status: { state: 'running', template: 'status' },
   };
+  const metricPayload = { ...payload, metric: { key: 'mrr', value: 12400, label: 'MRR', format: 'currency', unit: 'USD' } };
+  delete metricPayload.live_status;
   // Every documented field must be exercised, or a dropped one slips past.
-  assert.deepEqual(Object.keys(payload).sort(), [...SERVER_WEBHOOK_FIELDS].sort());
+  assert.deepEqual(
+    [...new Set([...Object.keys(payload), ...Object.keys(metricPayload)])].sort(),
+    [...SERVER_WEBHOOK_FIELDS].sort(),
+  );
 
   let captured;
   const fetchMock = async (url, init) => {
     captured = init;
     return new Response(JSON.stringify({ success: true }), { status: 200 });
   };
-  await sendIncomingWebhook('https://api.pingroom.io/api/webhooks/AB12/secret', payload, {
-    fetch: fetchMock,
-  });
-  assert.deepEqual(JSON.parse(captured.body), payload);
+  for (const body of [payload, metricPayload]) {
+    await sendIncomingWebhook('https://api.pingroom.io/api/webhooks/AB12/secret', body, {
+      fetch: fetchMock,
+    });
+    assert.deepEqual(JSON.parse(captured.body), body);
+  }
 });
 
 test('sendIncomingWebhook refuses an insecure URL', async () => {

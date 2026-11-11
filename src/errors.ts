@@ -164,6 +164,22 @@ export const REPLACE_ERROR_CODES = [
 ] as const;
 
 /**
+ * The coded refusals of room metrics (`metrics.set()`, `metrics.delete()` and an
+ * incoming webhook's `metric`). A write by someone who may not edit the room is a
+ * 403 with no `code`, like the other room configuration routes.
+ *
+ * Server: `RoomMetricController`, `WebhookMetricHandler`.
+ */
+export const METRIC_ERROR_CODES = [
+  // 422 — the room already holds its 8 metrics; delete one or reuse a key.
+  'metrics_limit_reached',
+  // 404 — `metrics.delete()` for a key the room does not have.
+  'metric_not_found',
+  // 409 — creating a key that exists. The agent `set()` is an upsert and never answers it.
+  'metric_exists',
+] as const;
+
+/**
  * Codes any route can answer, whatever the surface, so they sit in no
  * per-surface union.
  *
@@ -205,6 +221,9 @@ export type LiveClaimErrorCode = (typeof LIVE_CLAIM_ERROR_CODES)[number];
 /** @see REPLACE_ERROR_CODES */
 export type ReplaceErrorCode = (typeof REPLACE_ERROR_CODES)[number];
 
+/** @see METRIC_ERROR_CODES */
+export type MetricErrorCode = (typeof METRIC_ERROR_CODES)[number];
+
 /** @see HANDOFF_ERROR_CODES */
 export type HandoffErrorCode = (typeof HANDOFF_ERROR_CODES)[number];
 
@@ -222,6 +241,7 @@ export type AgentErrorCode =
   | QuickActionErrorCode
   | LiveClaimErrorCode
   | ReplaceErrorCode
+  | MetricErrorCode
   | RequestLimitErrorCode
   | CommonErrorCode;
 

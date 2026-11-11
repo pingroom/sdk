@@ -8,7 +8,8 @@
  *
  *  - sendIncomingWebhook: fire a room's INCOMING webhook (the URL carries its
  *    own secret, so no agent token is needed) — the one-line CI/deploy ping.
- *    Pass a top-level `live_status` to drive a Live Activity instead.
+ *    Pass a top-level `live_status` to drive a Live Activity instead, or a
+ *    top-level `metric` to update a room metric (no Ping is sent).
  */
 
 import { PingRoomError, PingRoomTimeoutError } from './errors.js';
@@ -24,10 +25,11 @@ import {
   MAX_PUBLIC_PING_MESSAGE_LENGTH,
   normalizeIdempotencyKey,
 } from './internal/guards.js';
+import { assertMetricFields, normalizeMetricKey } from './internal/metrics.js';
 import { assertSecureUrl, redactUrlInMessage, refuseRedirect } from './internal/url.js';
 import { invalidSuccessResponse, isRecord } from './internal/validate.js';
 import type { LiveStatus } from './liveStatus.js';
-import type { AckMode, ActionState, FetchLike, JsonObject } from './types.js';
+import type { AckMode, ActionState, FetchLike, JsonObject, RoomMetric, SetMetricInput } from './types.js';
 import { VERSION } from './version.js';
 
 export const WEBHOOK_SIGNATURE_HEADER = 'X-PingRoom-Signature';
@@ -170,6 +172,17 @@ export interface IncomingWebhookPayload {
    */
   live_status?: LiveStatus;
   /**
+   * Update a room metric instead of sending a Ping: `{ key, value, label?,
+   * format?, unit? }` (see `metrics.set()`). MUST be top-level, like
+   * `live_status`, and cannot be combined with it (the server answers 422).
+   * The webhook's own gates apply (secret, enabled, the owner's plan, the
+   * operator switches) and so does its rate limit, but not its per-webhook
+   * cooldown, and nothing is sent to anyone's phone: the other Ping fields in the
+   * body are ignored. The result carries the stored `metric`, plus
+   * `unchanged: true` when the value repeated what the metric already had.
+   */
+  metric?: IncomingWebhookMetric;
+  /**
    * Override the selected quick action and require acknowledgement for this
    * ping. Does NOT raise the delivery priority — that is {@link is_urgent}.
    */
@@ -184,6 +197,12 @@ export interface IncomingWebhookPayload {
   is_urgent?: boolean;
   /** Optional acknowledgement deadline in seconds. Omit/null for no deadline. */
   ack_timeout_seconds?: number | null;
+}
+
+/** The `metric` of an incoming webhook body: a metric key plus what `metrics.set()` takes. */
+export interface IncomingWebhookMetric extends SetMetricInput {
+  /** 1–40 characters of letters, digits, `-` and `_`; trimmed and lowercased by the server. */
+  key: string;
 }
 
 export interface SendIncomingWebhookOptions {
@@ -208,6 +227,10 @@ export interface IncomingWebhookResult {
   replaced?: boolean;
   message?: string;
   action_state?: ActionState | null;
+  /** Set when the body carried a `metric`: the metric as stored. */
+  metric?: RoomMetric;
+  /** `true` when a `metric` write repeated the stored value and changed nothing. */
+  unchanged?: boolean;
   [key: string]: unknown;
 }
 
@@ -245,6 +268,8 @@ export const INCOMING_WEBHOOK_FIELDS = [
   // Top level, never folded into `data` — the server routes on this key and
   // strips it from `data` so a legacy-path caller cannot spoof completion alerts.
   'live_status',
+  // Top level as well: a body with a `metric` updates a room metric and sends no Ping.
+  'metric',
 ] as const satisfies readonly (keyof IncomingWebhookPayload)[];
 
 /** POST to a room's incoming-webhook URL (which embeds the secret in its path). */
@@ -262,6 +287,7 @@ export async function sendIncomingWebhook(
   assertStructuredData(payload.data);
   assertTags(payload.tags);
   assertReplaceKey(payload.replaceKey);
+  assertWebhookMetric(payload);
 
   const body: Record<string, unknown> = {};
   for (const field of INCOMING_WEBHOOK_FIELDS) {
@@ -327,6 +353,24 @@ export async function sendIncomingWebhook(
 }
 
 // --- internals ------------------------------------------------------------
+
+/**
+ * A `metric` body is validated the way `metrics.set()` validates its arguments,
+ * and cannot ride with `live_status`: the server answers 422 rather than pick one.
+ */
+function assertWebhookMetric(payload: IncomingWebhookPayload): void {
+  if (payload.metric === undefined) {
+    return;
+  }
+  if (payload.live_status !== undefined) {
+    throw new PingRoomError('`metric` cannot be combined with `live_status`; send them as separate requests.', { code: 'invalid_request' });
+  }
+  if (payload.metric === null || typeof payload.metric !== 'object' || Array.isArray(payload.metric)) {
+    throw new PingRoomError('`metric` must be an object with a `key` and a `value`.', { code: 'invalid_request' });
+  }
+  normalizeMetricKey(payload.metric.key, 'metric.key');
+  assertMetricFields(payload.metric, { requireValue: true }, 'metric.');
+}
 
 function normalizeSignature(sig: string): string {
   const s = sig.trim();

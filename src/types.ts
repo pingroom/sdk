@@ -9,6 +9,7 @@
 export type * from './types/common.js';
 export type * from './types/auth.js';
 export type * from './types/rooms.js';
+export type * from './types/metrics.js';
 export type * from './types/notifications.js';
 export type * from './types/approvals.js';
 export type * from './types/questions.js';

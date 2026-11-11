@@ -19,6 +19,8 @@ export type AgentScope =
   | 'pingroom:webhooks:read'
   | 'pingroom:webhooks:write'
   | 'pingroom:webhooks:delete'
+  | 'pingroom:metrics:read'
+  | 'pingroom:metrics:write'
   | 'pingroom:agents:ping'
   | 'pingroom:approvals:request'
   | 'pingroom:questions:ask'

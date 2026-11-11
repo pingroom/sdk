@@ -24,6 +24,7 @@ export {
   COMMON_ERROR_CODES,
   HANDOFF_ERROR_CODES,
   LIVE_CLAIM_ERROR_CODES,
+  METRIC_ERROR_CODES,
   REPLACE_ERROR_CODES,
   ROOM_SCOPED_ERROR_CODES,
   QUICK_ACTION_ERROR_CODES,
@@ -37,6 +38,7 @@ export type {
   CommonErrorCode,
   HandoffErrorCode,
   LiveClaimErrorCode,
+  MetricErrorCode,
   PingRoomErrorInit,
   QuickActionErrorCode,
   ReplaceErrorCode,
@@ -56,6 +58,7 @@ export {
 } from './webhooks.js';
 export type {
   VerifyWebhookSignatureOptions,
+  IncomingWebhookMetric,
   IncomingWebhookPayload,
   SendIncomingWebhookOptions,
   IncomingWebhookResult,
@@ -91,6 +94,18 @@ export type {
   LiveStatusResult,
   LiveStatusSnapshot,
 } from './liveStatus.js';
+
+export {
+  MAX_METRICS_PER_ROOM,
+  MAX_METRIC_KEY_LENGTH,
+  MAX_METRIC_LABEL_LENGTH,
+  MAX_METRIC_UNIT_LENGTH,
+  MAX_METRIC_TEXT_VALUE_LENGTH,
+  MAX_METRIC_ABSOLUTE_VALUE,
+  METRIC_FORMATS,
+  METRIC_KEY_PATTERN,
+  normalizeMetricKey,
+} from './internal/metrics.js';
 
 export { VERSION } from './version.js';
 

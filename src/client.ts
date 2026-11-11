@@ -7,6 +7,7 @@ import { AuthApi } from './namespaces/auth.js';
 import { RoomsApi } from './namespaces/rooms.js';
 import { ActionsApi } from './namespaces/actions.js';
 import { WebhooksApi } from './namespaces/webhooks.js';
+import { MetricsApi } from './namespaces/metrics.js';
 import { NotificationsApi } from './namespaces/notifications.js';
 import { AttachmentsApi } from './namespaces/attachments.js';
 import { ApprovalsApi } from './namespaces/approvals.js';
@@ -32,6 +33,7 @@ export class PingRoom {
   readonly auth: AuthApi;
   readonly rooms: RoomsApi;
   readonly webhooks: WebhooksApi;
+  readonly metrics: MetricsApi;
   readonly actions: ActionsApi;
   readonly notifications: NotificationsApi;
   readonly attachments: AttachmentsApi;
@@ -60,6 +62,7 @@ export class PingRoom {
     this.auth = new AuthApi(this.http);
     this.rooms = new RoomsApi(this.http);
     this.webhooks = new WebhooksApi(this.http);
+    this.metrics = new MetricsApi(this.http);
     this.actions = new ActionsApi(this.http);
     this.notifications = new NotificationsApi(this.http);
     this.attachments = new AttachmentsApi(this.http);

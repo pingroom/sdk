@@ -827,6 +827,41 @@ await sendIncomingWebhook(webhookUrl, {
 
 > **Not inside `data`.** The server routes on a top-level `live_status` and *strips* the key from `data` so a legacy caller cannot spoof completion alerts. A nested `data.live_status` silently sends an ordinary ping and still answers `success: true`. (SDK versions before 0.3.1 dropped `live_status` from the request body entirely — upgrade.)
 
+## Room metrics
+
+A **metric** is a named value that lives in a room, set by a script and shown later by a phone widget: key `mrr`, label "MRR", format `currency`, unit `USD`, value `12400`. **Setting one sends no Ping and no push.** A room holds at most 8 (`MAX_METRICS_PER_ROOM`).
+
+```ts
+// Needs pingroom:metrics:write (pingroom:full covers it) and a human who owns or administers the room.
+await pr.metrics.set('ab12cd', 'mrr', { value: 12400, label: 'MRR', format: 'currency', unit: 'USD' });
+await pr.metrics.set('ab12cd', 'mrr', { value: 12650 });          // keeps the label, format and unit
+await pr.metrics.set('ab12cd', 'status', { value: 'All clear' });  // a string: a new metric becomes format "text"
+
+const { metrics, limit } = await pr.metrics.list('ab12cd');       // pingroom:metrics:read; oldest first
+// [{ key: 'mrr', label: 'MRR', format: 'currency', unit: 'USD', value: 12650, value_updated_at: '2026-11-11T08:12:30.000000Z' }, ...]
+
+await pr.metrics.delete('ab12cd', 'status');
+```
+
+`set()` is an upsert: it creates the metric when the key is new (a new metric's `label` defaults to its key and its `format` to `number` or `text` by the value's type) and otherwise updates it. Rules, checked before any request and the same as the server's:
+
+- `key`: 1–40 characters of letters, digits, `-` and `_`, trimmed and lowercased (`MRR` is `mrr`).
+- `label`: at most 24 characters. `format`: `number`, `currency`, `percent`, `unit` or `text`.
+- `unit`: required for `currency` (an ISO 4217 code such as `USD`; the SDK checks its shape, the server the list) and for `unit` (1–8 characters such as `ms`); not allowed for the other formats.
+- `value`: pass it **raw**, never `"$12,400"`; the widget formats it for the reader's locale. A finite number with an absolute value of at most 1e15 (four decimal places are kept, a plain decimal string such as `"12.5"` is also read as a number), or for `text` a string of at most 24 characters. `NaN`, `Infinity`, booleans and objects are refused. `percent` takes the percentage itself (`12.5` for 12.5%).
+
+Writing the value a metric already has changes nothing and leaves `value_updated_at` alone, so a script may repeat itself freely and the widget's "updated" time stays true. Changing a metric's `format` clears a value that no longer fits (a number cannot be text).
+
+From a room's incoming webhook, put `metric` at the **top level** of the payload (no token, no room, and the webhook's cooldown does not apply); the result carries the stored `metric` and `unchanged: true` when nothing changed. It cannot be combined with `live_status`:
+
+```ts
+await sendIncomingWebhook(process.env.PINGROOM_WEBHOOK_URL!, {
+  metric: { key: 'mrr', value: 12400, label: 'MRR', format: 'currency', unit: 'USD' },
+});
+```
+
+Refusals are coded: `metrics_limit_reached` (422), `metric_not_found` (404, on `delete()`), and the common `feature_disabled` when the operator switched room metrics off (see [Errors](#errors)). A write by someone who may not edit the room is a plain 403.
+
 ## Live Activities
 
 A **live-status stream** is one thing being tracked, keyed by your `correlation_id`. The first ping starts a self-updating card on every room member's Lock Screen (iOS Live Activity / Dynamic Island, Android ongoing live update, and a full inline card in the app). Later `running` pings move it **silently** — no new notification. The first `done`/`failed` sends one completion alert and ends it.
@@ -1095,6 +1130,7 @@ surface, so you can branch exhaustively:
 | `AgentInboxErrorCode` / `AGENT_INBOX_ERROR_CODES` | `inbox.ensure()` / `inbox.activate()` |
 | `QuickActionErrorCode` / `QUICK_ACTION_ERROR_CODES` | `actions.*` and a `broadcast()` naming an `action_number`: `quick_action_input_required`, `quick_action_input_type`, `action_not_configured`, `pro_required`, `quick_action_layout_changed`, `quick_action_page_in_use`; and, on `actions.trigger()` with `trigger_source: 'location'` only, `location_trigger_owner_only` (403) and `location_trigger_inactive` (409) |
 | `ReplaceErrorCode` / `REPLACE_ERROR_CODES` | `notifications.replace()`: `notification_not_found` (404), `not_ping_owner` (403), `unsupported_room`, `unsupported_question`, `unsupported_handoff`, `unsupported_live_status`, `unsupported_claim`, `unsupported_ack`, `unsupported_checklist`, `unsupported_source` (422), `replace_window_closed` and `replace_limit_reached` (409) |
+| `MetricErrorCode` / `METRIC_ERROR_CODES` | `metrics.*` and a webhook `metric`: `metrics_limit_reached` (422), `metric_not_found` (404) and `metric_exists` (409, never answered by the agent `set()`, which upserts) |
 | `CommonErrorCode` / `COMMON_ERROR_CODES` | any call: `rate_limited` (429, a route throttle; carries `retryAfter`) and `feature_disabled` (403, the operator switched the capability off; `error.body.feature` names the switch, for example `sending.attachments`, and retrying cannot succeed) |
 | `RequestLimitErrorCode` / `REQUEST_LIMIT_ERROR_CODES` | `payload_too_large` (HTTP 413 from the server on any oversized body) and `attachment_too_large` (raised locally by `attachments.upload()` above 5 MiB, before any bytes travel) |
 | `AgentErrorCode` | all of them, for one shared branch |
